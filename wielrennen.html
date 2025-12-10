@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>MarkPrinsen.nl Wielrennen</title>
+		<link rel="stylesheet" type="text/css" href="style.css">
+		<link rel="icon" type="image/png" href="MPfavicon.png">
+	</head>
+
+	<body>
+		<nav id="menu">
+			<img src="menuClose.png" id="menuClose" onclick="closeMenu()"><img>
+			<ul>
+				<li><a href="index.html">Home</a></li>
+				<li><a href="overmij.html">Over mij</a></li>
+				<li><a href="kitesurfen.html">Kitesurfen</a></li>
+				<li><a href="wielrennen.html">Wielrennen</a></li>
+				<li><a href="schaatsen.html">Schaatsen</a></li>
+			</ul>  
+		</nav>
+	
+		<div id="header"> <!-- slide animation right-->
+			<div id="logoDiv">
+				<a href="index.html"><img src="MPlogoPNG50px.png" id="logo"><img></a>
+			</div>
+			<div id="menuBtnDiv">
+				<img src="menuOpen.png" id="menuOpen" onclick="openMenu()"><img>
+			</div>
+			<div id="socialsDiv">
+				<div class="socialImgDiv"><img src="fullscreen.png" id="fullscreen" class="socialImg" onclick="toggleFullScreen()" alt="Fullscreen" ></img></div>
+				<div class="socialImgDiv"><a href="https://www.strava.com/athletes/4848318" target="_blank"><img src="strava.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://www.facebook.com/ShorttrackMark" target="_blank"><img src="facebook.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://twitter.com/shorttrackmark" target="_blank"><img src="twitter.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://linkedin.com/in/mark-prinsen-976a00149" target="_blank"><img src="linkedin.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://play.google.com/store/apps/developer?id=Mark+Prinsen&hl=nl" target="_blank"><img src="android.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://www.youtube.com/channel/UCF51U9FDTT5i85nn73MFMOw" target="_blank"><img src="youtube.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://www.instagram.com/mark.prinsen/" target="_blank"><img src="instagram.png" class="socialImg"></a></div>
+			</div>
+		</div>
+	
+		<div id="container"> <!-- slide animation left-->
+			<img src="arrowright.png" id="arrowRight" onclick="slideRight()">
+			<img src="arrowleft.png" id="arrowLeft" onclick="slideLeft()">
+			<div id="cyclingAnimation">
+				<img src="grassbottom.png" id="grassBottom"></img>
+				<img src="cyclistsblur.png" id="cyclists"></img>
+				<img src="grasstop.png" id="grassTop"></img>
+			</div>
+			<div id="textContent">
+					<h2>Wielrennen</h2>
+					Tijdens de fietstrainingen als shorttracker probeerde ik regelmatig een <a href="https://www.strava.com/athletes/4848318" target="_blank">Strava</a> KOM te pakken en het leek me erg leuk om ook ooit eens wedstrijden te gaan rijden. De fiets is een mooi product dat bijdraagt aan een goed milieu en gezonde mensen. 
+					Ik vind het heerlijk om samen met een groep op pad te gaan en nieuwe wegen te ontdekken. Daniël Lohues beschrijft dit gevoel mooi in het nummer <a href="https://www.youtube.com/results?search_query=op+fietse" target="_blank">Op Fietse</a>. Voor fietsers heb ik de <a href="https://play.google.com/store/apps/details?id=nl.markprinsen.cyclingcalclite&hl=nl" target="_blank">CyclingCalc app</a> gemaakt met daarin een aantal handige rekentools.
+					<br><br>
+					Toen ik stopte met shorttrack heb ik een wielerlicentie genomen en bij de amateurs pakte ik een aantal overwinningen. Na winst op het Districtkampioenschap in Gieten werd ik uitgenodigd door <a href="https://www.teamfryslan.frl/" target="_blank">Cycling Team Fryslan</a> om driedaagse Giro delle Miniere te rijden in Sardinië. 
+					In deze koers won ik een etappe en en het eindklassement. Hierna heb ik de overstap gemaakt naar de Elite en ben ik bij Cycling Team Fryslan gaan koersen. We hebben een mooie ploeg en rijden op de Friese fietsen van <a href="https://www.14carbon.com/" target="_blank">14Carbon</a>.
+					<br><br>
+					Iedere koers is weer totaal anders door het parcours, de omstandigheden en de deelnemers en dat maakt dat iedere koers een verhaal heeft. Hierover schrijf ik meestal een kort verslagje op Strava. In mijn eerste seizoen reed ik twee maal podium bij de Elite en in mijn tweede seizoen won ik in Roden, Bedum en Zevenhuizen met mooi teamwork.
+					<br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br>
+			</div>
+		</div>
+		
+		<!-- Open and Close fullscreen menu-->
+		<script>
+			var menu = document.getElementById("menu");
+			var menuOpen = document.getElementById("menuOpen");
+			function openMenu(){
+			menu.style.top = "0vh";
+			menuOpen.style.opacity = "0";
+			}
+			function closeMenu() {
+			menu.style.top = "-100vh";
+			menuOpen.style.opacity = "1";
+			}
+		</script>
+		
+		<!-- textcontent move in and out of screen-->
+		<script type="text/javascript">
+			var textContent = document.getElementById("textContent");
+			var arrowLeft = document.getElementById("arrowLeft");
+			var arrowRight = document.getElementById("arrowRight");
+			function slideRight(){
+				textContent.style.right = "-50%";
+				arrowRight.style.right = "-6vh";
+				arrowLeft.style.right = "0px";
+			}
+			function slideLeft() {
+				textContent.style.right = "0px";
+				arrowRight.style.right = "0px";
+				arrowLeft.style.right = "-6vh";
+			}
+		</script>
+		
+		<!-- Cycling 3D parallax animation -->
+		<script type="text/javascript">
+				var grassBottom = document.getElementById("grassBottom");
+				var cyclists = document.getElementById("cyclists");
+				var grassTop = document.getElementById("grassTop");
+				var cyclingText = document.getElementById("cyclingText");
+				
+				window.scrollTo(0,1); //hide address bar
+				//get touch position (-1,1) to (1,1)
+				document.ontouchmove = function(){
+					//console.log(event.touches[0].clientX, event.touches[0].clientY, window.innerWidth, window.innerHeight);
+					var x = (event.touches[0].clientX - window.innerWidth / 2) / window.innerWidth * 2;
+					var y  = (event.touches[0].clientY - window.innerHeight / 2) / window.innerHeight * 2;
+					parallax(x,y);
+				}
+				
+				//get mouse position (-1,1) to (1,1)
+				document.onmousemove = function(){
+					var x = (event.clientX - window.innerWidth / 2) / window.innerWidth * 2;
+					var y  = (event.clientY - window.innerHeight / 2) / window.innerHeight * 2;
+					//console.log(x,y);
+					parallax(x,y);
+				}
+				
+				function parallax(x,y) {
+					//move image positions bases on mouse location
+					grassBottom.style.left = -10 + x * 7 + '%';
+					grassBottom.style.top = -12 + y * 7 + '%';
+					cyclists.style.left = -18 + x * 5 + '%';
+					cyclists.style.top = -2 + y * 5 + '%';
+					grassTop.style.left = -3 + x * 3 + '%';
+					grassTop.style.top = -3 + y * 3 + '%';
+				}
+		</script>
+		
+		<!-- fullscreen-->
+		<script>
+        function toggleFullScreen() {
+          var doc = window.document;
+          var docEl = doc.documentElement;
+
+          var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen || docEl.msRequestFullscreen;
+          var cancelFullScreen = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+
+          if(!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) {
+            requestFullScreen.call(docEl);
+          }
+          else {
+            cancelFullScreen.call(doc);
+          }
+        }
+		</script>
+	</body>
+</html>

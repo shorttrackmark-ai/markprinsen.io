@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>MarkPrinsen.nl Home</title>
+		<link rel="stylesheet" type="text/css" href="style.css">
+		<link rel="icon" type="image/png" href="MPfavicon.png">
+	</head>
+
+	<body>
+		<nav id="menu">
+			<img src="menuClose.png" id="menuClose" onclick="closeMenu()"><img>
+			<ul>
+				<li><a href="index.html">Home</a></li>
+				<li><a href="overmij.html">Over mij</a></li>
+				<li><a href="kitesurfen.html">Kitesurfen</a></li>
+				<li><a href="wielrennen.html">Wielrennen</a></li>
+				<li><a href="schaatsen.html">Schaatsen</a></li>
+			</ul>  
+		</nav>
+	
+		<div id="header"> <!-- slide animation right-->
+			<div id="logoDiv">
+				<a href="index.html"><img src="MPlogoPNG50px.png" id="logo"><img></a>
+			</div>
+			<div id="menuBtnDiv">
+				<img src="menuOpen.png" id="menuOpen" onclick="openMenu()"><img>
+			</div>
+			<div id="socialsDiv">
+				<div class="socialImgDiv"><img src="fullscreen.png" id="fullscreen" class="socialImg" onclick="toggleFullScreen()" alt="Fullscreen" ></img></div>
+				<div class="socialImgDiv"><a href="https://www.strava.com/athletes/4848318" target="_blank"><img src="strava.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://www.facebook.com/ShorttrackMark" target="_blank"><img src="facebook.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://twitter.com/shorttrackmark" target="_blank"><img src="twitter.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://linkedin.com/in/mark-prinsen-976a00149" target="_blank"><img src="linkedin.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://play.google.com/store/apps/developer?id=Mark+Prinsen&hl=nl" target="_blank"><img src="android.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://www.youtube.com/channel/UCF51U9FDTT5i85nn73MFMOw" target="_blank"><img src="youtube.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://www.instagram.com/mark.prinsen/" target="_blank"><img src="instagram.png" class="socialImg"></a></div>
+			</div>
+		</div>
+	
+		<div id="container"> <!-- slide animation left-->
+			<div class="imageDiv">
+				<a href="overmij.html"><img src="mpHero.jpg" class="heroImg"><img></a>
+				<h1>Over mij</h1>
+			</div>
+			<div class="imageDiv">
+				<a href="kitesurfen.html"><img src="ksHero.jpg" class="heroImg"><img></a>
+				<h1>Kitesurfen</h1>
+			</div>
+			<div class="imageDiv">
+				<a href="wielrennen.html"><img src="rcHero.jpg" class="heroImg"><img></a>
+				<h1>Wielrennen</h1>
+			</div>
+			<div class="imageDiv">
+				<a href="schaatsen.html"><img src="stHero.jpg" class="heroImg"><img></a>
+				<h1>Schaatsen</h1>
+			</div>			
+		</div>
+		
+		<!-- fullscreen-->
+		<script>
+        function toggleFullScreen() {
+          var doc = window.document;
+          var docEl = doc.documentElement;
+
+          var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen || docEl.msRequestFullscreen;
+          var cancelFullScreen = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+
+          if(!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) {
+            requestFullScreen.call(docEl);
+          }
+          else {
+            cancelFullScreen.call(doc);
+          }
+        }
+		</script>
+		
+		<script>
+		 var menu = document.getElementById("menu");
+		 var menuOpen = document.getElementById("menuOpen");
+		 function openMenu(){
+		 menu.style.top = "0vh";
+		 menuOpen.style.opacity = "0";
+		 }
+		 function closeMenu() {
+		 menu.style.top = "-100vh";
+		 menuOpen.style.opacity = "1";
+		 }
+		</script>
+	</body>
+</html>

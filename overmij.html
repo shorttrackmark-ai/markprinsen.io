@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>MarkPrinsen.nl Over mij</title>
+		<link rel="stylesheet" type="text/css" href="style.css">
+		<link rel="icon" type="image/png" href="MPfavicon.png">
+	</head>
+
+	<body>
+		<nav id="menu">
+			<img src="menuClose.png" id="menuClose" onclick="closeMenu()"><img>
+			<ul>
+				<li><a href="index.html">Home</a></li>
+				<li><a href="overmij.html">Over mij</a></li>
+				<li><a href="kitesurfen.html">Kitesurfen</a></li>
+				<li><a href="wielrennen.html">Wielrennen</a></li>
+				<li><a href="schaatsen.html">Schaatsen</a></li>
+			</ul>  
+		</nav>
+	
+		<div id="header"> <!-- slide animation right-->
+			<div id="logoDiv">
+				<a href="index.html"><img src="MPlogoPNG50px.png" id="logo"><img></a>
+			</div>
+			<div id="menuBtnDiv">
+				<img src="menuOpen.png" id="menuOpen" onclick="openMenu()"><img>
+			</div>
+			<div id="socialsDiv">
+				<div class="socialImgDiv"><img src="fullscreen.png" id="fullscreen" class="socialImg" onclick="toggleFullScreen()" alt="Fullscreen" ></img></div>
+				<div class="socialImgDiv"><a href="https://www.strava.com/athletes/4848318" target="_blank"><img src="strava.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://www.facebook.com/ShorttrackMark" target="_blank"><img src="facebook.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://twitter.com/shorttrackmark" target="_blank"><img src="twitter.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://linkedin.com/in/mark-prinsen-976a00149" target="_blank"><img src="linkedin.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://play.google.com/store/apps/developer?id=Mark+Prinsen&hl=nl" target="_blank"><img src="android.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://www.youtube.com/channel/UCF51U9FDTT5i85nn73MFMOw" target="_blank"><img src="youtube.png" class="socialImg"></a></div>
+				<div class="socialImgDiv"><a href="https://www.instagram.com/mark.prinsen/" target="_blank"><img src="instagram.png" class="socialImg"></a></div>
+			</div>
+		</div>
+	
+		<div id="container"> <!-- slide animation left-->
+			<img src="arrowright.png" id="arrowRight" onclick="slideRight()">
+			<img src="arrowleft.png" id="arrowLeft" onclick="slideLeft()">
+			<div id="aboutMeAnimation">
+				<img src="orangewall.png" id="orangeWall"></img>
+				<img src="MPportrait.png" id="mpPortrait"></img>
+				<img src="MPportrait.png" id="shadow"></img>
+				<h2>Over mij</h2>
+			</div>
+			<div id="textContent">
+					<h2>Over mij</h2>
+					Ik ben graag actief en probeer mezelf zo veelzijdig mogelijk te ontwikkelen. Als topsporter heb ik veel geleerd en daarnaast heb ik ook VWO (NT&NG), een studie werktuigbouwkunde en een minor toegepaste wiskunde afgerond.
+					<br><br>
+					Het mooie aan race sporten als wielrennen en shorttrack vind ik de combinatie van snelheid, kracht en tactiek. Je moet samenwerken met je tegenstanders om uitendelijk als eerste over de finish te kunnen komen. Ik heb me altijd verdiept in voeding, materiaal, techniek, aerodynamica, trainingsvormen en strategie om het beste uit mezelf te halen. Allemaal dingen die je niet leert uit een boek, maar juist door er actief mee bezig te zijn.
+					<br><br>
+					Wiskunde en natuurkunde vind ik erg interessant en ik programmeer regelmatig tools in Python om specifieke vraagstukken op te lossen. Dit zijn enkele projecten waar ik aan gewerkt heb:
+					<br>- Hyperspectraal scanner met behulp van Artificial Intelligence
+					<br>- Random vibration test setup ontwikkeling
+					<br>- Reliability Life Data analyse
+					<br>- 3D Bochtenprofiel skeelerbaan Rotterdam
+					<br>
+					<br>Mijn creativiteit kan ik kwijt in kitesurfen door iedere sessie weer iets nieuws te proberen. Daarnaast fotografeer ik af en toe met mijn Canon 70D bewerk ik de foto's na in Photoshop. Hierin heb ik ook de kaarten van mijn kaartspel <a href="https://sites.google.com/view/everzwijnen" target="_blank">Everzwijnen</a> ontworpen. Hoewel ik zelf niet echt muzikaal ben, kan ik iedereen de <a href="https://open.spotify.com/playlist/7EeeuhPd2IW4ZRBSWnAUiI?si=VkPTH-dxQTWEgc27ut4JPA" target="_blank">ActiNL Spotify playlist</a> aanraden. Voor deze website heb ik gebruik gemaakt van HTML, CSS en een beetje JavaScript.
+					<br>
+					<br>Maak voor contact gebruik van mijn social media kanalen of ga een keer mee fietsen!
+					<br>
+			</div>
+		</div>
+		
+		<!-- Open and Close fullscreen menu-->
+		<script>
+			var menu = document.getElementById("menu");
+			var menuOpen = document.getElementById("menuOpen");
+			function openMenu(){
+			menu.style.top = "0vh";
+			menuOpen.style.opacity = "0";
+			}
+			function closeMenu() {
+			menu.style.top = "-100vh";
+			menuOpen.style.opacity = "1";
+			}
+		</script>
+		
+		<!-- textcontent move in and out of screen-->
+		<script type="text/javascript">
+			var textContent = document.getElementById("textContent");
+			var arrowLeft = document.getElementById("arrowLeft");
+			var arrowRight = document.getElementById("arrowRight");
+			function slideRight(){
+				textContent.style.right = "-50%";
+				arrowRight.style.right = "-6vh";
+				arrowLeft.style.right = "0px";
+			}
+			function slideLeft() {
+				textContent.style.right = "0px";
+				arrowRight.style.right = "0px";
+				arrowLeft.style.right = "-6vh";
+			}
+		</script>
+		
+		<!-- fullscreen-->
+		<script>
+        function toggleFullScreen() {
+          var doc = window.document;
+          var docEl = doc.documentElement;
+
+          var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen || docEl.msRequestFullscreen;
+          var cancelFullScreen = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+
+          if(!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) {
+            requestFullScreen.call(docEl);
+          }
+          else {
+            cancelFullScreen.call(doc);
+          }
+        }
+		</script>
+		
+		<!-- 3D portrait Parallax animation -->
+		<script type="text/javascript">
+				var mpPortrait = document.getElementById("mpPortrait");
+				var orangeWall = document.getElementById("orangeWall");
+				
+				window.scrollTo(0,1); //hide address bar
+				//get touch position (-1,1) to (1,1)
+				document.ontouchmove = function(){
+					//console.log(event.touches[0].clientX, event.touches[0].clientY, window.innerWidth, window.innerHeight);
+					var x = (event.touches[0].clientX - window.innerWidth / 2) / window.innerWidth * 2;
+					var y  = (event.touches[0].clientY - window.innerHeight / 2) / window.innerHeight * 2;
+					parallax(x,y);
+				}
+				
+				//get mouse position (-1,1) to (1,1)
+				document.onmousemove = function(){
+					var x = (event.clientX - window.innerWidth / 2) / window.innerWidth * 2;
+					var y  = (event.clientY - window.innerHeight / 2) / window.innerHeight * 2;
+					//console.log(x,y);
+					parallax(x,y);
+				}
+				
+				function parallax(x,y){
+					//move image positions bases on mouse location
+					mpPortrait.style.left = -0 + x * -0.2 + '%';
+					mpPortrait.style.bottom = -0.3 + y * + +0.2 + '%';
+					mpPortrait.style.transform = "perspective(1000px) rotateX("+0.3*y+"deg) rotateY("+-0.6*x+"deg)"
+					orangeWall.style.left = -5 + x * 3 + '%';
+					orangeWall.style.top = -5 + y * 3 + '%';
+					
+					//add shadow
+					var shadowDist = 1; //vw
+					var shadowBlur = 2.5; //vw
+					var shadowColor = "#00000055"
+					//moving shadow
+					//mpPortrait.style.filter = "drop-shadow("+ -1 + shadowDist * x + "vw "
+					//+ 1 + shadowDist * y + "vw "+ shadowBlur + "vw " + shadowColor + ")";
+					//fixed shadow
+					mpPortrait.style.filter = "drop-shadow("+ shadowDist * -2 + "vw "
+					+ shadowDist * 3 + "vw "+ shadowBlur + "vw " + shadowColor + ")";
+				}
+		</script>
+	</body>
+</html>
