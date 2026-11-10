@@ -9,7 +9,9 @@
     "db:migrate:local": "wrangler d1 migrations apply ordovia --local",
     "db:migrate:remote": "wrangler d1 migrations apply ordovia --remote",
     "deploy": "wrangler d1 migrations apply ordovia --remote && wrangler deploy",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "deploy:demo": "wrangler d1 migrations apply ordovia-demo --env demo --remote && wrangler deploy --env demo",
+    "db:migrate:demo": "wrangler d1 migrations apply ordovia-demo --env demo --remote"
   },
   "devDependencies": {
     "wrangler": "^4.40.0"

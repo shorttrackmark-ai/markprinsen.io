@@ -10,6 +10,8 @@
     "binding": "ASSETS",
     "run_worker_first": ["/api/*"]
   },
+  // Where the "Try the example" button on the sign-in screen leads (the demo copy below)
+  "vars": { "DEMO_URL": "https://ordovia-demo.shorttrackmark.workers.dev" },
   "d1_databases": [
     {
       "binding": "DB",
@@ -20,5 +22,22 @@
     }
   ],
   // Hourly job: marks overdue tasks in the timeline and fires reminder webhooks
-  "triggers": { "crons": ["17 * * * *"] }
+  "triggers": { "crons": ["17 * * * *"] },
+
+  "env": {
+    // The public example: the same code with its own database, one-click sign-in as demo colleagues, and a nightly reset.
+    //   npm run deploy:demo
+    "demo": {
+      "name": "ordovia-demo",
+      "main": "src/index.js",
+      "compatibility_date": "2025-10-01",
+      "observability": { "enabled": true },
+      "vars": { "DEMO": "1" },
+      "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+      "d1_databases": [
+        { "binding": "DB", "database_name": "ordovia-demo", "database_id": "2642f888-ce9e-4976-848b-7b811c61d68f", "migrations_dir": "migrations" }
+      ],
+      "triggers": { "crons": ["30 3 * * *"] }
+    }
+  }
 }

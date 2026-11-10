@@ -5,6 +5,15 @@ import { FB, lit, slugify, hashPassword, makeDirectory, recordLabel, formViewSQL
 import { advance, startNode, mergeFormData } from './engine.js';
 
 export const DEMO_PASSWORD = 'demo1234';
+export const DEMO_ADMIN = { name: 'Demo Admin', email: 'demo@example.com' };
+
+/** The public example only: wipe everything and seed the demo company again. */
+export async function resetDemo(db) {
+  const views = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'view' AND name LIKE 'form\\_%' ESCAPE '\\'").all()).results;
+  const order = ['audit', 'flow_versions', 'events', 'tasks', 'submissions', 'instances', 'dashboards', 'flows', 'forms', 'api_tokens', 'person_tags', 'tags', 'sessions', 'areas', 'persons', 'settings'];
+  await db.batch([...views.map(v => db.prepare('DROP VIEW IF EXISTS "' + v.name + '"')), ...order.map(t => db.prepare('DELETE FROM ' + t))]);
+  return seedDemo(db, { ...DEMO_ADMIN, hash: await hashPassword(DEMO_PASSWORD) });
+}
 
 export async function seedDemo(db, admin) {
   const M = { flow_versions: [], areas: [], settings: [], persons: [], tags: [], person_tags: [], forms: [], flows: [], instances: [], tasks: [], submissions: [], events: [], dashboards: [] };

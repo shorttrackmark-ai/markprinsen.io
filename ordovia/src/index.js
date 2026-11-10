@@ -9,7 +9,9 @@ import {
   STATUSES, cleanStatus, reviewDueAt, likePattern,
 } from './lib.js';
 import { advance, startNode, mergeFormData } from './engine.js';
-import { seedDemo } from './seed.js';
+import { seedDemo, resetDemo, DEMO_ADMIN, DEMO_PASSWORD } from './seed.js';
+
+let DEMO = false;   // true on the public example (env DEMO=1): one-click sign-in, nightly reset, nothing leaves the building
 
 const SESSION_DAYS = 14;
 const routes = [];
@@ -49,6 +51,7 @@ export default {
     const url = new URL(req.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
     const c = new Ctx(req, env, exec);
+    DEMO = env.DEMO === '1';
     try {
       // CSRF protection: state-changing calls must carry our custom header (forces a CORS preflight cross-site).
       const bearer = /^bearer\s+ord_/i.test(req.headers.get('authorization') || '');
@@ -79,6 +82,7 @@ export default {
   // Hourly: flag overdue tasks and send reminders to the notification webhook.
   async scheduled(event, env, exec) {
     const db = env.DB;
+    if (env.DEMO === '1') { await resetDemo(db); return; }   // (the example starts fresh every night)
     const due = await all(db, `SELECT t.id, t.name, t.instance_id, i.title FROM tasks t JOIN instances i ON i.id = t.instance_id
       WHERE t.status = 'open' AND t.due_at IS NOT NULL AND t.due_at < ? AND t.reminded_at IS NULL LIMIT 40`, now());
     if (!due.length) return;
@@ -94,6 +98,7 @@ export default {
 };
 
 async function postJSON(url, payload) {
+  if (DEMO) return;   // (the example sends nothing anywhere)
   try { await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }); }
   catch (e) { console.warn('webhook failed', url, e.message); }
 }
@@ -129,7 +134,7 @@ async function startSession(c, personId) {
 route('GET', '/api/session', async (c) => {
   const any = await first(c.db, 'SELECT id FROM persons LIMIT 1');
   const s = await c.settings();
-  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', demo: s.demo === '1' } };
+  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', demo: s.demo === '1', demoSite: DEMO, demoUrl: DEMO ? '' : (c.env.DEMO_URL || '') } };
 }, { public: true });
 
 route('POST', '/api/setup', async (c) => {
@@ -658,6 +663,7 @@ route('GET', '/api/admin/people', async (c) => {
   return { people: [...D.persons.values()].map(p => ({ ...p, tagIds: [...D.tagIdsOf(p.id)] })), tags: [...D.tags.values()], categories: D.categories() };
 }, { admin: true });
 async function savePerson(c, pid, b) {
+  if (DEMO) throw new HttpError(403, 'People cannot be changed in the example.');
   const email = String(b.email || '').trim(), name = String(b.name || '').trim();
   if (!name || !/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, 'Name and a valid e-mail are required');
   if (await first(c.db, 'SELECT 1 FROM persons WHERE email = ? AND id != ?', email, pid || 0)) throw new HttpError(409, 'E-mail already in use');
@@ -697,6 +703,7 @@ route('POST', '/api/admin/sql', async (c) => {
   const sql = String((await c.body()).sql || '').trim();
   if (!sql) throw new HttpError(400, 'Empty query');
   if (/\b(sessions|pw_hash)\b/i.test(sql)) throw new HttpError(400, 'Passwords and sessions are protected.');
+  if (DEMO && !/^\s*(select|with|explain)\b/i.test(sql)) throw new HttpError(403, 'In the example the SQL console is read-only.');
   const t0 = Date.now();
   try { const r = await tabular(c.db, sql); return { ...r, ms: Date.now() - t0 }; }
   catch (e) { throw new HttpError(400, e.message.replace(/^D1_ERROR: /, '')); }
@@ -708,6 +715,7 @@ route('PUT', '/api/admin/settings', async (c) => {
   const set = (k, v) => st.push(c.db.prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, v));
   if (b.company != null) set('company', String(b.company).slice(0, 80));
   if (b.color != null) { if (b.color && !/^#[0-9a-f]{6}$/i.test(b.color)) throw new HttpError(400, 'Colour must look like #4f46e5'); set('color', b.color); }
+  if (DEMO && b.notify_webhook) throw new HttpError(403, 'Webhooks are switched off in the example.');
   if (b.notify_webhook != null) { if (b.notify_webhook && !/^https:\/\//.test(b.notify_webhook)) throw new HttpError(400, 'Webhook must start with https://'); set('notify_webhook', b.notify_webhook); }
   if (st.length) await c.db.batch(st);
 }, { admin: true });
@@ -971,3 +979,28 @@ route('POST', '/api/v1/forms/:slug/records', async (c, { slug }) => {
   return new Response(JSON.stringify({ id: rid, data: res.data }), { status: 201, headers: { 'content-type': 'application/json; charset=utf-8' } });
 });
 route('GET', '/api/v1/ping', async (c) => ({ ok: true, as: c.user.name }));
+
+// ---------------------------------------------------------------- the public example (only where DEMO=1)
+const PERSONAS = { admin: DEMO_ADMIN.email, anna: 'anna@example.com', bram: 'bram@example.com', sanne: 'sanne@example.com', carla: 'carla@example.com', daan: 'daan@example.com', eva: 'eva@example.com' };
+async function ensureDemoData(c) {
+  if (!(await first(c.db, 'SELECT id FROM persons LIMIT 1'))) { await resetDemo(c.db); await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now())); }
+}
+route('POST', '/api/demo/enter', async (c) => {
+  if (!DEMO) throw new HttpError(404, 'Not available');
+  await ensureDemoData(c);
+  let b = {}; try { b = (await c.body()) || {}; } catch { /* default persona */ }
+  const email = PERSONAS[b.as] || PERSONAS.admin;
+  const p = await first(c.db, 'SELECT id FROM persons WHERE email = ?', email);
+  if (!p) throw new HttpError(404, 'Demo person not found');
+  await startSession(c, p.id);
+  return { ok: true };
+}, { public: true });
+route('POST', '/api/demo/reset', async (c) => {
+  if (!DEMO) throw new HttpError(404, 'Not available');
+  const nowMs = Date.now();
+  const seeded = await first(c.db, "SELECT value FROM settings WHERE key = 'demo_seeded_at'");
+  if (seeded && nowMs - Number(seeded.value) < 10 * 60000) throw new HttpError(429, 'The example was reset a moment ago. Try again in a few minutes.');
+  await resetDemo(c.db);
+  await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now()));
+  return { ok: true };
+}, { public: true });

@@ -34,13 +34,32 @@
       ${link('#/admin/settings', '⚙', 'Settings')}</div>` : ''}`;
     if (FB.isAdmin() && FB.loadHealthCount) FB.loadHealthCount();
     $('#who').innerHTML = `<span class="avatar">${esc(u.name.split(' ').map(s => s[0]).slice(0, 2).join(''))}</span><span class="who-name">${esc(u.name)}</span>`;
+    const dc = $('#demoCtl');
+    if (dc && FB.state.settings.demoSite) {
+      dc.innerHTML = `<span class="demo-pill" title="The example resets every night and sends nothing anywhere">Example</span><select id="demoWho" aria-label="Look through someone else's eyes">${PERSONAS.map(([k, l]) => `<option value="${k}" ${(k === 'admin' ? 'demo@example.com' : k + '@example.com') === u.email ? 'selected' : ''}>${esc(l.split(' – ')[0])}</option>`).join('')}</select><button class="btn small ghost" id="demoReset" title="Throw away all changes and start fresh">Reset</button>`;
+      $('#demoWho').onchange = (e) => enterDemo(e.target.value);
+      $('#demoReset').onclick = async () => { if (!confirm('Reset the example to its starting state?')) return; try { await api.post('/demo/reset'); await enterDemo('admin'); toast('The example is fresh again', 'ok'); } catch (err) { toast(err.message, 'error'); } };
+    }
     $('#brandName').textContent = FB.state.settings.company && FB.state.settings.company !== 'Ordovia' ? FB.state.settings.company : 'Ordovia';
   };
   FB.refreshBadge = () => refreshBadge();
   const refreshBadge = async () => { try { await FB.loadMeta(); FB.shell((location.hash || '#/').slice(1).split('?')[0] || '/'); } catch (e) { /* ignore */ } };
 
   // ---------------- setup & login ----------------
+  const PERSONAS = [['admin', 'Admin – builds processes, forms and dashboards'], ['anna', 'Anna – Manager, Sales'], ['bram', 'Bram – Employee, Sales'], ['carla', 'Carla – Employee, Operations'], ['daan', 'Daan – Manager, Operations'], ['eva', 'Eva – Finance']];
+  const enterDemo = async (as) => { try { await api.post('/demo/enter', { as }); await FB.loadMeta(); location.hash = '#/'; FB.render(); } catch (err) { toast(err.message, 'error'); } };
+  FB.enterDemo = enterDemo;
+  const exampleButton = () => (FB.state.settings.demoUrl ? `<a class="btn block example-btn" href="${esc(FB.state.settings.demoUrl)}">▶ Try the example – no login needed</a>` : '');
   P.login = function (main) {
+    if (FB.state.settings.demoSite) {
+      main.innerHTML = `<div class="login-wrap"><div class="card login"><div class="brand big"><span class="logo-mark">◆</span> Ordovia – example</div>
+        <p class="muted">A small company with people, forms, three processes and a dashboard. Click around, start a process, approve a task – the example resets every night and sends nothing anywhere.</p>
+        <button class="btn primary block" id="demoGo">Enter the example</button>
+        <p class="small muted">Or look through someone else's eyes:</p>${PERSONAS.slice(1).map(([k, l]) => `<button type="button" class="chip" data-as="${k}">${esc(l)}</button>`).join('')}</div></div>`;
+      $('#demoGo', main).onclick = (e) => { e.target.disabled = true; e.target.textContent = 'Preparing the example…'; enterDemo('admin'); };
+      $$('[data-as]', main).forEach(b => b.onclick = () => { b.disabled = true; enterDemo(b.dataset.as); });
+      return;
+    }
     if (FB.state.setup) return P.setup(main);
     main.innerHTML = `<div class="login-wrap"><form class="card login" id="loginForm">
       <div class="brand big"><span class="logo-mark">◆</span> ${esc(FB.state.settings.company || 'Ordovia')}</div>
@@ -48,6 +67,7 @@
       <label>E-mail<input name="email" type="email" autocomplete="username" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn primary block">Sign in</button>
+      ${exampleButton()}
       ${FB.state.settings.demo ? `<div class="demo-users"><p class="small muted">Demo colleagues (password <code>demo1234</code>):</p>
         ${[['anna', 'Anna – Manager, Sales'], ['bram', 'Bram – Employee, Sales'], ['carla', 'Carla – Employee, Operations'], ['daan', 'Daan – Manager, Operations'], ['eva', 'Eva – Finance']]
           .map(([k, l]) => `<button type="button" class="chip" data-email="${k}@example.com">${esc(l)}</button>`).join('')}</div>` : ''}
@@ -70,7 +90,7 @@
       <label>E-mail<input name="email" type="email" required autocomplete="username"></label>
       <label>Password <small class="muted">(at least 8 characters)</small><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
       <label class="check"><input type="checkbox" name="demo" checked><span>Fill with demo data (colleagues, forms, processes, dashboard)</span></label>
-      <button class="btn primary block">Create workspace</button></form></div>`;
+      <button class="btn primary block">Create workspace</button>${exampleButton()}</form></div>`;
     const f = $('#setupForm');
     f.onsubmit = async (e) => {
       e.preventDefault();

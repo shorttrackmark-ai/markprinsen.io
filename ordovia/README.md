@@ -19,6 +19,16 @@ Runs on **Cloudflare**: a Worker (API + process engine) with a **D1** (SQLite) d
 
 Plus the **Process handbook**: purpose, owner, scope, records and step-by-step work instructions per process — generated from the live flow, printable, and shown inside each task.
 
+## Interface between departments and systems
+
+Ordovia is not a replacement for Outlook or Teams; it is the layer between departments and systems, an API built on processes:
+
+- **Request forms**: every process can have a form as its input. Colleagues fill it in the app, systems send it through the API, and anyone can use it through a **public web form** (a link, no login).
+- **API** (`/api/v1/…`, Bearer tokens made under *Control › API & web forms*): list processes with their input, start a run (with your own `reference` and an optional `callbackUrl`), follow status/outcome/outputs, read and add records. Tokens act as a chosen person, with exactly that person's rights.
+- **Outgoing**: webhook steps and run callbacks.
+- **Structure**: areas, status, owners, review dates, history, audit and a health page keep it tidy – see `docs/STRUCTURE.md`.
+- **Example**: a second Worker (`npm run deploy:demo`, its own database, resets every night) gives "Try the example" without a login.
+
 ## Run locally
 
 ```bash
