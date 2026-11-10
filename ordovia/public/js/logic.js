@@ -1,0 +1,173 @@
+/* Ordovia form logic (shared by browser and Cloudflare Worker).
+ * The browser uses it for live feedback; the Worker runs the exact same rules again
+ * before anything is stored, so calculations and checks cannot be bypassed.
+ */
+(function () {
+  'use strict';
+  const root = typeof window !== 'undefined' ? window : globalThis;
+  const FB = root.FB = root.FB || {};
+
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+  const KEY_RE = /^[a-z_][a-z0-9_]*$/;
+  const isEmpty = (v) => v == null || v === '' || v === false || (Array.isArray(v) && !v.length);
+  const hasVal = (x) => x !== '' && x != null;
+
+  /** Normalise a raw input value to the field's type. Returns {value, error}. */
+  function coerce(f, v) {
+    if (v === undefined || v === '' || v === null) return { value: f.type === 'checkbox' ? false : null };
+    switch (f.type) {
+      case 'number': { const n = Number(v); return Number.isFinite(n) ? { value: n } : { value: null, error: 'Not a number.' }; }
+      case 'checkbox': return { value: v === true || v === 'true' || v === 1 || v === 'on' };
+      case 'person': case 'record': { const n = Number(v); return Number.isInteger(n) ? { value: n } : { value: null, error: 'Invalid choice.' }; }
+      case 'date': return DATE_RE.test(String(v)) ? { value: String(v) } : { value: null, error: 'Use a valid date.' };
+      case 'select': case 'radio': return (f.options || []).includes(String(v)) ? { value: String(v) } : { value: null, error: 'Not one of the options.' };
+      default: return { value: String(v).slice(0, 20000) };
+    }
+  }
+
+  const Logic = {
+    KEY_RE,
+    /**
+     * Compute calculations and visibility.
+     * input: raw values by key · context: process variables · linked: {"supplier.country": "NL", ...}
+     */
+    compute(fields, input, context, linked) {
+      const values = Object.assign({}, input);
+      const ctx = () => Object.assign({}, context || {}, linked || {}, values);
+      for (let pass = 0; pass < 3; pass++) {
+        for (const f of fields) if (f.type === 'calc') values[f.key] = FB.expr.safe(f.formula, ctx(), null);
+      }
+      const visible = {};
+      for (const f of fields) visible[f.key] = !f.visibleIf || FB.expr.truthy(FB.expr.safe(f.visibleIf, ctx(), false));
+      return { values, visible, ctx: ctx() };
+    },
+
+    /** Return {key: message} for every visible field that breaks a rule. */
+    validate(fields, values, visible, ctx) {
+      const errors = {};
+      for (const f of fields) {
+        if (f.type === 'heading' || f.type === 'calc' || !visible[f.key]) continue;
+        const v = values[f.key];
+        let msg = '';
+        if (f.required && isEmpty(v)) msg = 'This field is required.';
+        else if (f.type === 'number' && v != null) {
+          if (hasVal(f.min) && v < Number(f.min)) msg = `Minimum is ${f.min}.`;
+          else if (hasVal(f.max) && v > Number(f.max)) msg = `Maximum is ${f.max}.`;
+        } else if (f.type === 'email' && v && !EMAIL_RE.test(v)) msg = 'Not a valid e-mail address.';
+        if (!msg && f.validate && !isEmpty(v) && !FB.expr.truthy(FB.expr.safe(f.validate, ctx, true))) msg = f.validateMsg || 'Value is not valid.';
+        if (msg) errors[f.key] = msg;
+      }
+      return errors;
+    },
+
+    /** Form-level logic checks (rules spanning several fields). Returns list of messages. */
+    checks(form, ctx) {
+      return (form.checks || []).filter(c => c.rule && !FB.expr.truthy(FB.expr.safe(c.rule, ctx, true))).map(c => c.message || `Check failed: ${c.rule}`);
+    },
+
+    /**
+     * Full server-side pipeline: coerce → compute → validate → clean.
+     * lookup(field, id) must return {label, data} for person/record fields, or null if not allowed.
+     */
+    finalize(form, input, context, lookup) {
+      const fields = form.fields;
+      const raw = {}, errors = {}, linked = {};
+      for (const f of fields) {
+        if (f.type === 'heading' || f.type === 'calc') continue;
+        const c = coerce(f, input ? input[f.key] : undefined);
+        raw[f.key] = c.value;
+        if (c.error) errors[f.key] = c.error;
+        if ((f.type === 'person' || f.type === 'record') && c.value != null) {
+          const hit = lookup(f, c.value);
+          if (!hit) { errors[f.key] = 'Invalid choice.'; raw[f.key] = null; continue; }
+          raw[f.key + '_label'] = hit.label;
+          for (const [k, val] of Object.entries(hit.data || {})) linked[f.key + '.' + k] = val;
+        }
+      }
+      const { values, visible, ctx } = this.compute(fields, raw, context, linked);
+      Object.assign(errors, Object.assign(this.validate(fields, values, visible, ctx), errors)); // type/lookup errors win
+      const formErrors = Object.keys(errors).length ? [] : this.checks(form, ctx);
+      const data = {};
+      for (const f of fields) {
+        if (f.type === 'heading') continue;
+        data[f.key] = visible[f.key] ? (values[f.key] ?? null) : null;
+        if (f.type === 'person' || f.type === 'record') data[f.key + '_label'] = visible[f.key] ? (values[f.key + '_label'] ?? null) : null;
+      }
+      return { data, linked, errors, formErrors, ok: !Object.keys(errors).length && !formErrors.length };
+    },
+
+    /** Static checks on a form definition (used when saving in the builder and on the server). */
+    lint(form) {
+      const problems = [], keys = new Set();
+      for (const f of form.fields || []) {
+        if (!KEY_RE.test(f.key || '')) problems.push(`Field key “${f.key}” must be lower-case letters, digits or _.`);
+        if (keys.has(f.key)) problems.push(`Field key “${f.key}” is used twice.`);
+        keys.add(f.key);
+        for (const prop of ['formula', 'visibleIf', 'default', 'validate']) {
+          const err = f[prop] ? FB.expr.check(f[prop]) : null;
+          if (err) problems.push(`${f.label || f.key} – ${prop}: ${err}`);
+        }
+        if (f.type === 'record' && !f.recordForm) problems.push(`${f.label || f.key}: choose the linked form.`);
+      }
+      for (const c of form.checks || []) { const err = c.rule ? FB.expr.check(c.rule) : null; if (err) problems.push(`Check “${c.message || c.rule}”: ${err}`); }
+      return problems;
+    },
+
+    /** SQL for a dashboard widget built with the visual builder (or its own SQL). */
+    widgetSQL(w) {
+      const qi = (s) => '"' + String(s).replace(/"/g, '""') + '"';
+      if (w.mode === 'sql') return w.sql || '';
+      if (!w.src) return '';
+      const where = w.where && String(w.where).trim() ? ` WHERE ${w.where}` : '';
+      const limit = Number(w.limit) > 0 ? Math.min(1000, Math.floor(Number(w.limit))) : 0;
+      if (w.type === 'table' && !w.groupBy) return `SELECT * FROM ${qi(w.src)}${where} ORDER BY 1 DESC LIMIT ${limit || 50}`;
+      const agg = ['count', 'sum', 'avg', 'min', 'max'].includes(w.agg) ? w.agg : 'count';
+      const value = agg === 'count' || !w.field ? 'COUNT(*)' : `ROUND(${agg.toUpperCase()}(${qi(w.field)}), 2)`;
+      if (w.type === 'kpi' || !w.groupBy) return `SELECT ${value} AS value FROM ${qi(w.src)}${where}`;
+      const col = qi(w.groupBy);
+      const label = { month: `substr(${col}, 1, 7)`, day: `substr(${col}, 1, 10)`, year: `substr(${col}, 1, 4)` }[w.groupFn] || `coalesce(${col}, '(empty)')`;
+      const order = w.groupFn || w.type === 'line' ? '1' : '2 DESC';
+      return `SELECT ${label} AS label, ${value} AS value FROM ${qi(w.src)}${where} GROUP BY 1 ORDER BY ${order}${limit ? ' LIMIT ' + limit : ''}`;
+    },
+
+    /** "name = expression" lines used by Calculate and Record steps. */
+    assignments(text) {
+      return String(text || '').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('//')).map(l => {
+        const i = l.indexOf('=');
+        return i < 0 ? { name: l, expr: 'null' } : { name: l.slice(0, i).trim(), expr: l.slice(i + 1).trim() || 'null' };
+      });
+    },
+
+    /** Structural and logic checks on a flowchart. formIds: ids of existing forms. */
+    lintFlow(graph, formIds) {
+      const errs = [], g = graph || { nodes: [], edges: [] };
+      const known = formIds ? new Set(formIds.map(Number)) : null;
+      const ids = new Set(g.nodes.map(n => n.id));
+      if (g.nodes.filter(n => n.type === 'start').length !== 1) errs.push('A flow needs exactly one Start.');
+      if (!g.nodes.some(n => n.type === 'end')) errs.push('A flow needs at least one End.');
+      for (const n of g.nodes) {
+        const out = g.edges.filter(e => e.from === n.id);
+        if (n.type !== 'end' && !out.length) errs.push(`“${n.name}” has no outgoing arrow.`);
+        if (n.type !== 'start' && !g.edges.some(e => e.to === n.id)) errs.push(`“${n.name}” can never be reached.`);
+        if (n.type === 'task' && !n.formId) errs.push(`Task “${n.name}” has no form.`);
+        if (n.type === 'task' && known && n.formId && !known.has(Number(n.formId))) errs.push(`Task “${n.name}” uses a form that no longer exists.`);
+        if (n.type === 'record' && !n.formId) errs.push(`Record step “${n.name}” has no form.`);
+        if (n.type === 'record' && n.mode === 'update' && !n.recordId) errs.push(`Record step “${n.name}” needs the id of the record to update.`);
+        if (n.type === 'webhook' && !/^https:\/\//.test(n.url || '')) errs.push(`Webhook “${n.name}” needs an https:// address.`);
+        if (out.length > 1 && !out.some(e => !e.condition)) errs.push(`“${n.name}” needs one arrow without condition (the “otherwise” path).`);
+        for (const prop of ['assignments', 'mapping']) {
+          for (const a of this.assignments(n[prop])) { const er = FB.expr.check(a.expr); if (er) errs.push(`“${n.name}”: ${a.name} – ${er}`); }
+        }
+        if (n.recordId) { const er = FB.expr.check(n.recordId); if (er) errs.push(`“${n.name}” record id: ${er}`); }
+        if (n.type === 'start' && n.title) { const er = FB.expr.check(n.title); if (er) errs.push(`Process title: ${er}`); }
+      }
+      for (const e of g.edges) {
+        if (!ids.has(e.from) || !ids.has(e.to)) errs.push('An arrow points to a removed step.');
+        if (e.condition) { const er = FB.expr.check(e.condition); if (er) errs.push(`Arrow “${e.label || e.condition}”: ${er}`); }
+      }
+      return errs;
+    },
+  };
+  FB.logic = Logic;
+})();

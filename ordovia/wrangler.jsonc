@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ordovia",
+  "main": "src/index.js",
+  "compatibility_date": "2025-10-01",
+  "observability": { "enabled": true },
+  // The Worker serves /api/*; everything else is the static app in ./public
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ordovia",
+      // Replace with the id printed by: npx wrangler d1 create ordovia
+      "database_id": "c8e3a1b8-502c-438a-86df-e3f7ef292e4d",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Hourly job: marks overdue tasks in the timeline and fires reminder webhooks
+  "triggers": { "crons": ["17 * * * *"] }
+}

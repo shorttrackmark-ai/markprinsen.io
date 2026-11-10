@@ -1,0 +1,588 @@
+// Ordovia API – Cloudflare Worker on D1.
+// Every rule that matters (who may see/do what, form calculations and checks, the process engine)
+// runs here on the server. The browser only renders.
+import {
+  FB, HttpError, now, parse, slugify, qi, all, first, run, Tx,
+  hashPassword, verifyPassword, sha256, randomToken, COOKIE, sessionCookie, readCookie,
+  loadDirectory, loadForms, recordLabel, formViewSQL,
+  canViewForm, canAddForm, tagRule, assertSelect, tabular,
+} from './lib.js';
+import { advance, startNode, mergeFormData } from './engine.js';
+import { seedDemo } from './seed.js';
+
+const SESSION_DAYS = 14;
+const routes = [];
+const route = (method, path, handler, opts = {}) => {
+  const keys = [];
+  const re = new RegExp('^' + path.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; }) + '$');
+  routes.push({ method, re, keys, handler, opts });
+};
+
+// ---------------------------------------------------------------- request context
+class Ctx {
+  constructor(req, env, exec) {
+    this.req = req; this.env = env; this.db = env.DB; this.exec = exec;
+    this.url = new URL(req.url); this.user = null; this.cookies = [];
+    this._dir = null; this._forms = null; this._settings = null;
+  }
+  async dir() { return this._dir || (this._dir = await loadDirectory(this.db)); }
+  async forms() { return this._forms || (this._forms = await loadForms(this.db)); }
+  async formsMap() { return new Map((await this.forms()).map(f => [f.id, f])); }
+  async form(id) { const f = (await this.forms()).find(x => x.id === Number(id)); if (!f) throw new HttpError(404, 'Form not found'); return f; }
+  async settings() {
+    if (!this._settings) this._settings = Object.fromEntries((await all(this.db, 'SELECT key, value FROM settings')).map(r => [r.key, r.value]));
+    return this._settings;
+  }
+  async body() { try { return await this.req.json(); } catch { throw new HttpError(400, 'Invalid JSON body'); } }
+  requireAdmin() { if (!this.user || !this.user.is_admin) throw new HttpError(403, 'Administrators only'); }
+}
+
+const reply = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), {
+  status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...headers },
+});
+
+export default {
+  async fetch(req, env, exec) {
+    const url = new URL(req.url);
+    if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
+    const c = new Ctx(req, env, exec);
+    try {
+      // CSRF protection: state-changing calls must carry our custom header (forces a CORS preflight cross-site).
+      if (req.method !== 'GET' && req.headers.get('x-ordovia') !== '1') throw new HttpError(403, 'Missing request header');
+      await authenticate(c);
+      for (const r of routes) {
+        if (r.method !== req.method) continue;
+        const m = r.re.exec(url.pathname);
+        if (!m) continue;
+        if (!r.opts.public && !c.user) throw new HttpError(401, 'Please sign in');
+        if (r.opts.admin) c.requireAdmin();
+        const params = {}; r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
+        const out = await r.handler(c, params);
+        const res = out instanceof Response ? out : reply(out ?? { ok: true });
+        c.cookies.forEach(ck => res.headers.append('set-cookie', ck));
+        return res;
+      }
+      throw new HttpError(404, 'Unknown endpoint');
+    } catch (e) {
+      if (e instanceof HttpError) return reply({ error: e.message, ...(e.extra || {}) }, e.status);
+      console.error(e);
+      const msg = /no such table/i.test(String(e.message)) ? 'Database not initialised – run the D1 migrations (npm run db:migrate:remote).' : 'Server error: ' + e.message;
+      return reply({ error: msg }, 500);
+    }
+  },
+
+  // Hourly: flag overdue tasks and send reminders to the notification webhook.
+  async scheduled(event, env, exec) {
+    const db = env.DB;
+    const due = await all(db, `SELECT t.id, t.name, t.instance_id, i.title FROM tasks t JOIN instances i ON i.id = t.instance_id
+      WHERE t.status = 'open' AND t.due_at IS NOT NULL AND t.due_at < ? AND t.reminded_at IS NULL LIMIT 40`, now());
+    if (!due.length) return;
+    const tx = new Tx(db);
+    for (const t of due) {
+      tx.add('UPDATE tasks SET reminded_at = ? WHERE id = ?', now(), t.id);
+      tx.add('INSERT INTO events(instance_id, message, created_at) VALUES (?,?,?)', t.instance_id, `Task “${t.name}” is overdue`, now());
+    }
+    await tx.commit();
+    const hook = await first(db, "SELECT value FROM settings WHERE key = 'notify_webhook'");
+    if (hook && hook.value) exec.waitUntil(Promise.all(due.map(t => postJSON(hook.value, { event: 'task.overdue', text: `Overdue: ${t.name} – ${t.title}`, task: t }))));
+  },
+};
+
+async function postJSON(url, payload) {
+  try { await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }); }
+  catch (e) { console.warn('webhook failed', url, e.message); }
+}
+
+// ---------------------------------------------------------------- auth
+async function authenticate(c) {
+  const token = readCookie(c.req, COOKIE);
+  if (!token) return;
+  const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin FROM sessions s JOIN persons p ON p.id = s.person_id
+    WHERE s.token_hash = ? AND s.expires_at > ? AND p.active = 1`, await sha256(token), now());
+  if (s) c.user = s;
+}
+async function startSession(c, personId) {
+  const token = randomToken();
+  const exp = new Date(Date.now() + SESSION_DAYS * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+  await c.db.batch([
+    c.db.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(now()),
+    c.db.prepare('INSERT INTO sessions(token_hash, person_id, expires_at) VALUES (?,?,?)').bind(await sha256(token), personId, exp),
+  ]);
+  c.cookies.push(sessionCookie(token, SESSION_DAYS * 86400));
+}
+
+route('GET', '/api/session', async (c) => {
+  const any = await first(c.db, 'SELECT id FROM persons LIMIT 1');
+  const s = await c.settings();
+  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', demo: s.demo === '1' } };
+}, { public: true });
+
+route('POST', '/api/setup', async (c) => {
+  if (await first(c.db, 'SELECT id FROM persons LIMIT 1')) throw new HttpError(409, 'Already set up');
+  const b = await c.body();
+  const email = String(b.email || '').trim(), name = String(b.name || '').trim();
+  if (!name || !/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, 'Name and a valid e-mail are required');
+  if (String(b.password || '').length < 8) throw new HttpError(400, 'Use a password of at least 8 characters');
+  const hash = await hashPassword(String(b.password));
+  await c.db.batch([
+    c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('company', ?)").bind(String(b.company || 'My company').slice(0, 80)),
+  ]);
+  let adminId;
+  if (b.demo) adminId = await seedDemo(c.db, { name, email, hash });
+  else adminId = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at) VALUES (?,?,?,1,1,?)', name, email, hash, now());
+  await startSession(c, adminId);
+  return { ok: true };
+}, { public: true });
+
+route('POST', '/api/login', async (c) => {
+  const b = await c.body();
+  const p = await first(c.db, 'SELECT id, pw_hash FROM persons WHERE email = ? AND active = 1', String(b.email || '').trim());
+  // Always run the hash so timing does not reveal whether the e-mail exists.
+  const ok = await verifyPassword(String(b.password || ''), p ? p.pw_hash : 'pbkdf2$1$AAAAAAAAAAAAAAAAAAAAAA==$x');
+  if (!p || !ok) throw new HttpError(401, 'Wrong e-mail or password');
+  await startSession(c, p.id);
+  return { ok: true };
+}, { public: true });
+
+route('POST', '/api/logout', async (c) => {
+  const token = readCookie(c.req, COOKIE);
+  if (token) await run(c.db, 'DELETE FROM sessions WHERE token_hash = ?', await sha256(token));
+  c.cookies.push(sessionCookie('', 0));
+  return { ok: true };
+}, { public: true });
+
+// ---------------------------------------------------------------- shared lookups
+route('GET', '/api/meta', async (c) => {
+  const D = await c.dir(), forms = await c.forms();
+  return {
+    user: c.user,
+    tags: [...D.tags.values()],
+    categories: D.categories(),
+    people: [...D.persons.values()].filter(p => p.active).map(p => ({ id: p.id, name: p.name, tagIds: [...D.tagIdsOf(p.id)] })),
+    forms: forms.map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields, checks: f.checks, canView: canViewForm(c.user, D, f), canAdd: canAddForm(c.user, D, f) })),
+    openTasks: (await openTasksFor(c, c.user.id)).length,
+  };
+});
+
+async function openTasksFor(c, pid) {
+  const D = await c.dir();
+  const rows = await all(c.db, `SELECT t.id, t.name, t.assignee, t.created_at, t.due_at, t.instance_id, i.title AS process, i.vars, i.started_by, f.name AS flow
+    FROM tasks t JOIN instances i ON i.id = t.instance_id JOIN flows f ON f.id = i.flow_id WHERE t.status = 'open' ORDER BY t.created_at`);
+  return rows.filter(t => D.matches(pid, parse(t.assignee, {}), t)).map(t => ({
+    id: t.id, name: t.name, process: t.process, flow: t.flow, instance_id: t.instance_id, created_at: t.created_at, due_at: t.due_at,
+    overdue: !!(t.due_at && t.due_at < now()), assignee: D.describe(parse(t.assignee, {})),
+  }));
+}
+
+/** May this user look at this process? */
+async function canSeeInstance(c, inst) {
+  if (c.user.is_admin || inst.started_by === c.user.id) return true;
+  const D = await c.dir();
+  const tasks = await all(c.db, 'SELECT assignee, status, completed_by FROM tasks WHERE instance_id = ?', inst.id);
+  return tasks.some(t => t.completed_by === c.user.id || (t.status === 'open' && D.matches(c.user.id, parse(t.assignee, {}), inst)));
+}
+
+// ---------------------------------------------------------------- home & processes
+route('GET', '/api/home', async (c) => {
+  const D = await c.dir();
+  const flows = (await all(c.db, 'SELECT id, name, description, graph FROM flows ORDER BY name')).filter(f => {
+    const s = startNode(parse(f.graph, { nodes: [] }));
+    return s && tagRule(c.user, D, s.startTags);
+  }).map(f => ({ id: f.id, name: f.name, description: f.description }));
+  const mine = await all(c.db, 'SELECT * FROM v_instances WHERE id IN (SELECT id FROM instances WHERE started_by = ?) ORDER BY created_at DESC LIMIT 8', c.user.id);
+  return { tasks: await openTasksFor(c, c.user.id), flows, mine };
+});
+
+route('POST', '/api/flows/:id/start', async (c, { id }) => {
+  const flow = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
+  if (!flow) throw new HttpError(404, 'Flow not found');
+  const graph = parse(flow.graph, { nodes: [], edges: [] });
+  const forms = await c.forms();
+  const errs = FB.logic.lintFlow(graph, forms.map(f => f.id));
+  if (errs.length) throw new HttpError(400, 'This process is not ready: ' + errs[0]);
+  const D = await c.dir();
+  const s = startNode(graph);
+  if (!D.hasTags(c.user.id, s.startTags) && !c.user.is_admin) throw new HttpError(403, 'You may not start this process');
+  const vars = { initiator: D.profile(c.user.id), process: flow.name };
+  const iid = await run(c.db, 'INSERT INTO instances(flow_id, flow_version, graph, title, status, vars, started_by, created_at) VALUES (?,?,?,?,?,?,?,?)',
+    flow.id, flow.version, flow.graph, flow.name, 'running', JSON.stringify(vars), c.user.id, now());
+  const proc = { id: iid, flowName: flow.name, graph, vars, title: `${flow.name} #${iid}`, status: 'running', started_by: c.user.id, finished_at: null };
+  const tx = new Tx(c.db);
+  const io = await runtimeIO(c, tx, proc);
+  io.log(`Started by ${c.user.name}`, c.user.id);
+  advance(proc, s.id, io);
+  await finishProc(c, tx, proc);
+  const next = (await openTasksFor(c, c.user.id)).find(t => t.instance_id === iid);
+  return { instanceId: iid, taskId: next ? next.id : null };
+});
+
+async function runtimeIO(c, tx, proc) {
+  const D = await c.dir();
+  const forms = await c.formsMap();
+  const hook = (await c.settings()).notify_webhook;
+  const origin = c.url.origin;
+  return {
+    now, forms, describe: (r) => D.describe(r),
+    log: (message, personId) => tx.add('INSERT INTO events(instance_id, person_id, message, created_at) VALUES (?,?,?,?)', proc.id, personId ?? null, message, now()),
+    createTask: (t) => {
+      tx.add('INSERT INTO tasks(instance_id, node_id, name, form_id, assignee, status, due_at, created_at) VALUES (?,?,?,?,?,?,?,?)',
+        proc.id, t.nodeId, t.name, t.formId, JSON.stringify(t.assignee), 'open', t.dueAt, now());
+      if (hook) tx.after.push({ url: hook, payload: { event: 'task.created', text: `New task: ${t.name} – ${proc.title} (for ${D.describe(t.assignee)})`, link: origin + '/#/', task: t.name, process: proc.title } });
+    },
+    createRecord: (form, data) => tx.add('INSERT INTO submissions(form_id, person_id, instance_id, data, created_at) VALUES (?,?,?,?,?)', form.id, null, proc.id, JSON.stringify(data), now()),
+    updateRecord: (form, rid, patch) => tx.add('UPDATE submissions SET data = json_patch(data, ?), updated_at = ? WHERE id = ? AND form_id = ?', JSON.stringify(patch), now(), rid, form.id),
+    webhook: (url, payload) => { if (/^https:\/\//.test(url || '')) tx.after.push({ url, payload }); },
+  };
+}
+
+async function finishProc(c, tx, proc) {
+  tx.add('UPDATE instances SET vars = ?, status = ?, title = ?, finished_at = ? WHERE id = ?', JSON.stringify(proc.vars), proc.status, proc.title, proc.finished_at, proc.id);
+  await tx.commit();
+  if (tx.after.length) c.exec.waitUntil(Promise.all(tx.after.map(h => postJSON(h.url, h.payload))));
+}
+
+/** Validate a form submission on the server: types, lookups, calculations, rules. */
+async function finalizeForm(c, form, input, context) {
+  const D = await c.dir();
+  const ids = form.fields.filter(f => f.type === 'record' && input && input[f.key] != null && input[f.key] !== '').map(f => Number(input[f.key])).filter(Number.isInteger);
+  const recs = ids.length ? await all(c.db, `SELECT id, form_id, data FROM submissions WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  const forms = await c.formsMap();
+  const lookup = (f, id) => {
+    if (f.type === 'person') {
+      const p = D.persons.get(id);
+      return p && p.active && D.hasTags(id, f.personTags) ? { label: p.name, data: D.profile(id) } : null;
+    }
+    const r = recs.find(x => x.id === id && x.form_id === Number(f.recordForm));
+    if (!r) return null;
+    const data = parse(r.data, {});
+    return { label: recordLabel(forms.get(r.form_id), r.id, data, f.recordLabel), data };
+  };
+  return FB.logic.finalize(form, input || {}, context || {}, lookup);
+}
+
+route('GET', '/api/tasks/:id', async (c, { id }) => {
+  const t = await first(c.db, `SELECT t.*, i.vars, i.title AS process, i.started_by, i.graph, i.id AS iid, i.status AS istatus
+    FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE t.id = ?`, Number(id));
+  if (!t) throw new HttpError(404, 'Task not found');
+  const inst = { id: t.iid, started_by: t.started_by, vars: t.vars };
+  if (!(await canSeeInstance(c, inst))) throw new HttpError(403, 'Not your task');
+  const D = await c.dir();
+  const node = parse(t.graph, { nodes: [] }).nodes.find(n => n.id === t.node_id) || {};
+  const previous = await all(c.db, `SELECT s.id, s.form_id, s.data, s.created_at, tk.name AS task_name, p.name AS who
+    FROM submissions s LEFT JOIN tasks tk ON tk.id = s.task_id LEFT JOIN persons p ON p.id = s.person_id WHERE s.instance_id = ? ORDER BY s.id`, t.iid);
+  const own = t.submission_id ? previous.find(s => s.id === t.submission_id) : null;
+  return {
+    task: { id: t.id, name: t.name, status: t.status, form_id: t.form_id, created_at: t.created_at, due_at: t.due_at, completed_at: t.completed_at, instance_id: t.iid, process: t.process },
+    instructions: node.instructions || '',
+    assignee: D.describe(parse(t.assignee, {})),
+    canComplete: t.status === 'open' && D.matches(c.user.id, parse(t.assignee, {}), inst),
+    vars: parse(t.vars, {}),
+    previous: previous.filter(s => s !== own).map(s => ({ ...s, data: parse(s.data, {}) })),
+    submission: own ? { ...own, data: parse(own.data, {}) } : null,
+  };
+});
+
+route('POST', '/api/tasks/:id/complete', async (c, { id }) => {
+  const b = await c.body();
+  const t = await first(c.db, 'SELECT t.*, i.vars, i.title, i.started_by, i.graph, i.status AS istatus, f.name AS flow_name FROM tasks t JOIN instances i ON i.id = t.instance_id JOIN flows f ON f.id = i.flow_id WHERE t.id = ?', Number(id));
+  if (!t) throw new HttpError(404, 'Task not found');
+  if (t.status !== 'open') throw new HttpError(409, 'This task is no longer open');
+  const D = await c.dir();
+  const inst = { id: t.instance_id, started_by: t.started_by, vars: t.vars };
+  if (!D.matches(c.user.id, parse(t.assignee, {}), inst)) throw new HttpError(403, 'This task is assigned to someone else');
+  const proc = { id: t.instance_id, flowName: t.flow_name, graph: parse(t.graph, { nodes: [], edges: [] }), vars: parse(t.vars, {}), title: t.title, status: t.istatus, started_by: t.started_by, finished_at: null };
+  const tx = new Tx(c.db);
+  // Guard against double completion inside the same atomic batch.
+  tx.add("UPDATE tasks SET status = 'done', completed_by = ?, completed_at = ? WHERE id = ? AND status = 'open'", c.user.id, now(), t.id);
+  if (t.form_id) {
+    const form = await c.form(t.form_id);
+    const res = await finalizeForm(c, form, b.data, proc.vars);
+    if (!res.ok) throw new HttpError(422, 'Please check the form', { errors: res.errors, formErrors: res.formErrors });
+    tx.add('INSERT INTO submissions(form_id, person_id, instance_id, task_id, data, created_at) VALUES (?,?,?,?,?,?)', form.id, c.user.id, t.instance_id, t.id, JSON.stringify(res.data), now());
+    tx.add('UPDATE tasks SET submission_id = last_insert_rowid() WHERE id = ?', t.id);
+    mergeFormData(proc, form, res.data, res.linked);
+  }
+  const io = await runtimeIO(c, tx, proc);
+  io.log(`Task “${t.name}” completed by ${c.user.name}`, c.user.id);
+  advance(proc, t.node_id, io);
+  await finishProc(c, tx, proc);
+  const next = (await openTasksFor(c, c.user.id)).find(x => x.instance_id === t.instance_id);
+  return { instanceId: t.instance_id, taskId: next ? next.id : null };
+});
+
+route('GET', '/api/instances', async (c) => {
+  const status = c.url.searchParams.get('status') || '';
+  const rows = await all(c.db, `SELECT v.*, i.started_by AS started_by_id FROM v_instances v JOIN instances i ON i.id = v.id ${status ? 'WHERE v.status = ?' : ''} ORDER BY v.created_at DESC LIMIT 500`, ...(status ? [status] : []));
+  if (c.user.is_admin) return rows;
+  const mineIds = new Set((await all(c.db, 'SELECT DISTINCT instance_id FROM tasks WHERE completed_by = ?', c.user.id)).map(r => r.instance_id));
+  (await openTasksFor(c, c.user.id)).forEach(t => mineIds.add(t.instance_id));
+  return rows.filter(r => r.started_by_id === c.user.id || mineIds.has(r.id));
+});
+
+route('GET', '/api/instances/:id', async (c, { id }) => {
+  const raw = await first(c.db, 'SELECT * FROM instances WHERE id = ?', Number(id));
+  if (!raw) throw new HttpError(404, 'Process not found');
+  if (!(await canSeeInstance(c, raw))) throw new HttpError(403, 'No access to this process');
+  const D = await c.dir();
+  const [info, tasks, events] = await Promise.all([
+    first(c.db, 'SELECT * FROM v_instances WHERE id = ?', raw.id),
+    all(c.db, 'SELECT t.id, t.name, t.node_id, t.status, t.assignee, t.due_at, t.completed_at, p.name AS who FROM tasks t LEFT JOIN persons p ON p.id = t.completed_by WHERE instance_id = ? ORDER BY t.id', raw.id),
+    all(c.db, 'SELECT message, created_at FROM events WHERE instance_id = ? ORDER BY id', raw.id),
+  ]);
+  return { instance: info, graph: parse(raw.graph, { nodes: [], edges: [] }), vars: parse(raw.vars, {}), events,
+    tasks: tasks.map(t => ({ ...t, assignee: D.describe(parse(t.assignee, {})) })) };
+});
+
+route('DELETE', '/api/instances/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM instances WHERE id = ?', Number(id)); }, { admin: true });
+
+// ---------------------------------------------------------------- records (form data)
+route('GET', '/api/forms/:id/records', async (c, { id }) => {
+  const form = await c.form(id), D = await c.dir();
+  const view = qi('form_' + form.slug);
+  const all_ = canViewForm(c.user, D, form);
+  const res = await tabular(c.db, `SELECT * FROM ${view} ${all_ ? '' : 'WHERE person_id = ' + Number(c.user.id)} ORDER BY id DESC LIMIT 2000`);
+  return { form, ...res, canAdd: canAddForm(c.user, D, form), scope: all_ ? 'all' : 'mine' };
+});
+
+route('GET', '/api/forms/:id/options', async (c, { id }) => {
+  const form = await c.form(id), D = await c.dir(), forms = await c.formsMap();
+  const out = {};
+  for (const f of form.fields) {
+    if (f.type === 'person') out[f.key] = D.personOptions(f.personTags).map(p => ({ ...p, data: D.profile(p.id) }));
+    if (f.type === 'record' && forms.has(Number(f.recordForm))) {
+      const target = forms.get(Number(f.recordForm));
+      const rows = await all(c.db, 'SELECT id, data FROM submissions WHERE form_id = ? ORDER BY id DESC LIMIT 1000', target.id);
+      out[f.key] = rows.map(r => { const data = parse(r.data, {}); return { id: r.id, name: recordLabel(target, r.id, data, f.recordLabel), data }; });
+    }
+  }
+  return out;
+});
+
+route('POST', '/api/forms/:id/records', async (c, { id }) => {
+  const form = await c.form(id), D = await c.dir();
+  if (!canAddForm(c.user, D, form)) throw new HttpError(403, 'You may not add records to this form directly');
+  const b = await c.body();
+  const res = await finalizeForm(c, form, b.data, { initiator: D.profile(c.user.id) });
+  if (!res.ok) throw new HttpError(422, 'Please check the form', { errors: res.errors, formErrors: res.formErrors });
+  const rid = await run(c.db, 'INSERT INTO submissions(form_id, person_id, data, created_at) VALUES (?,?,?,?)', form.id, c.user.id, JSON.stringify(res.data), now());
+  return { id: rid };
+});
+
+route('GET', '/api/records/:id', async (c, { id }) => {
+  const s = await first(c.db, 'SELECT s.*, p.name AS who FROM submissions s LEFT JOIN persons p ON p.id = s.person_id WHERE s.id = ?', Number(id));
+  if (!s) throw new HttpError(404, 'Record not found');
+  const form = await c.form(s.form_id), D = await c.dir();
+  if (!canViewForm(c.user, D, form) && s.person_id !== c.user.id) throw new HttpError(403, 'No access');
+  // Which records in other forms link to this one?
+  const linking = (await c.forms()).flatMap(f => f.fields.filter(x => x.type === 'record' && Number(x.recordForm) === form.id).map(x => ({ f, key: x.key })));
+  const linkedFrom = [];
+  for (const l of linking) {
+    const rows = await all(c.db, `SELECT id FROM submissions WHERE form_id = ? AND json_extract(data, '$.${l.key}') = ? ORDER BY id DESC LIMIT 50`, l.f.id, s.id);
+    rows.forEach(r => linkedFrom.push({ formId: l.f.id, form: l.f.name, id: r.id }));
+  }
+  return { record: { ...s, data: parse(s.data, {}) }, form, linkedFrom, canEdit: !!c.user.is_admin };
+});
+
+route('PUT', '/api/records/:id', async (c, { id }) => {
+  const s = await first(c.db, 'SELECT * FROM submissions WHERE id = ?', Number(id));
+  if (!s) throw new HttpError(404, 'Record not found');
+  const form = await c.form(s.form_id), D = await c.dir();
+  const b = await c.body();
+  const res = await finalizeForm(c, form, b.data, { initiator: D.profile(s.person_id || c.user.id) });
+  if (!res.ok) throw new HttpError(422, 'Please check the form', { errors: res.errors, formErrors: res.formErrors });
+  await run(c.db, 'UPDATE submissions SET data = ?, updated_at = ? WHERE id = ?', JSON.stringify(res.data), now(), s.id);
+}, { admin: true });
+
+route('DELETE', '/api/records/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM submissions WHERE id = ?', Number(id)); }, { admin: true });
+
+// ---------------------------------------------------------------- handbook (process documentation)
+route('GET', '/api/handbook', async (c) => {
+  const rows = await all(c.db, 'SELECT id, name, description, doc, version, updated_at, graph FROM flows ORDER BY name');
+  return rows.map(f => { const g = parse(f.graph, { nodes: [] }); return { id: f.id, name: f.name, description: f.description, doc: parse(f.doc, {}), version: f.version, updated_at: f.updated_at, steps: g.nodes.filter(n => n.type === 'task').length }; });
+});
+route('GET', '/api/handbook/:id', async (c, { id }) => {
+  const f = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
+  if (!f) throw new HttpError(404, 'Process not found');
+  const D = await c.dir(), forms = await c.formsMap();
+  const graph = parse(f.graph, { nodes: [], edges: [] });
+  const stats = await first(c.db, "SELECT count(*) AS runs, sum(status = 'running') AS running, round(avg(hours), 1) AS avg_hours FROM v_instances WHERE flow = ?", f.name);
+  const steps = graph.nodes.map(n => ({
+    id: n.id, type: n.type, name: n.name, instructions: n.instructions || '',
+    responsible: n.type === 'task' ? D.describe(n.assignee || { type: 'initiator' }) : '',
+    form: n.formId && forms.get(Number(n.formId)) ? forms.get(Number(n.formId)).name : '',
+    dueHours: n.dueHours || null,
+    next: graph.edges.filter(e => e.from === n.id).map(e => ({ to: (graph.nodes.find(x => x.id === e.to) || {}).name, when: e.label || e.condition || '' })),
+  }));
+  return { id: f.id, name: f.name, description: f.description, doc: parse(f.doc, {}), version: f.version, updated_at: f.updated_at, graph, steps, stats };
+});
+
+// ---------------------------------------------------------------- dashboards
+route('GET', '/api/dashboards', async (c) => {
+  const D = await c.dir();
+  return (await all(c.db, 'SELECT * FROM dashboards ORDER BY name')).map(d => ({ ...d, widgets: parse(d.widgets, []), access: parse(d.access, {}) }))
+    .filter(d => tagRule(c.user, D, d.access.viewTags)).map(d => ({ id: d.id, name: d.name, widgets: d.widgets.length }));
+});
+route('GET', '/api/dashboards/:id', async (c, { id }) => {
+  const d = await first(c.db, 'SELECT * FROM dashboards WHERE id = ?', Number(id));
+  if (!d) throw new HttpError(404, 'Dashboard not found');
+  const D = await c.dir();
+  const access = parse(d.access, {});
+  if (!tagRule(c.user, D, access.viewTags)) throw new HttpError(403, 'No access to this dashboard');
+  const widgets = parse(d.widgets, []);
+  const results = {};
+  await Promise.all(widgets.map(async w => { results[w.id] = await runWidget(c, w); }));
+  return { id: d.id, name: d.name, widgets, access, results, canEdit: !!c.user.is_admin };
+});
+async function runWidget(c, w) {
+  try { const sql = FB.logic.widgetSQL(w); if (!sql) return { columns: [], values: [] }; return await tabular(c.db, assertSelect(sql)); }
+  catch (e) { return { error: e.message.replace(/^D1_ERROR: /, '') }; }
+}
+route('POST', '/api/admin/query', async (c) => runWidget(c, (await c.body()).widget || {}), { admin: true });
+route('POST', '/api/admin/dashboards', async (c) => {
+  const b = await c.body();
+  return { id: await run(c.db, 'INSERT INTO dashboards(name, widgets, updated_at) VALUES (?,?,?)', String(b.name || 'New dashboard').slice(0, 120), '[]', now()) };
+}, { admin: true });
+route('PUT', '/api/admin/dashboards/:id', async (c, { id }) => {
+  const b = await c.body();
+  await run(c.db, 'UPDATE dashboards SET name = ?, widgets = ?, access = ?, updated_at = ? WHERE id = ?', String(b.name || 'Dashboard').slice(0, 120), JSON.stringify(b.widgets || []), JSON.stringify(b.access || {}), now(), Number(id));
+}, { admin: true });
+route('DELETE', '/api/admin/dashboards/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM dashboards WHERE id = ?', Number(id)); }, { admin: true });
+
+// ---------------------------------------------------------------- admin: forms
+route('GET', '/api/admin/forms', async (c) => {
+  const counts = Object.fromEntries((await all(c.db, 'SELECT form_id, count(*) AS n FROM submissions GROUP BY form_id')).map(r => [r.form_id, r.n]));
+  return (await c.forms()).map(f => ({ id: f.id, name: f.name, slug: f.slug, fields: f.fields.length, records: counts[f.id] || 0, updated_at: f.updated_at }));
+}, { admin: true });
+route('GET', '/api/admin/forms/:id', async (c, { id }) => {
+  const forms = await c.forms();
+  const f = await c.form(id);
+  const usedIn = (await all(c.db, 'SELECT id, name, graph FROM flows')).filter(fl => parse(fl.graph, { nodes: [] }).nodes.some(n => Number(n.formId) === f.id)).map(fl => fl.name);
+  return { form: f, others: forms.filter(x => x.id !== f.id).map(x => ({ id: x.id, name: x.name, fields: x.fields })), usedIn };
+}, { admin: true });
+route('POST', '/api/admin/forms', async (c) => {
+  const b = await c.body();
+  const name = String(b.name || '').trim().slice(0, 120);
+  if (!name) throw new HttpError(400, 'Name required');
+  let slug = slugify(name), n = 2;
+  while (await first(c.db, 'SELECT 1 FROM forms WHERE slug = ?', slug)) slug = slugify(name) + '_' + n++;
+  const id = await run(c.db, 'INSERT INTO forms(name, slug, description, fields, access, updated_at) VALUES (?,?,?,?,?,?)', name, slug, '', '[]', '{}', now());
+  await c.db.batch(formViewSQL({ id, slug, fields: [] }).map(s => c.db.prepare(s)));
+  return { id };
+}, { admin: true });
+route('PUT', '/api/admin/forms/:id', async (c, { id }) => {
+  const old = await c.form(id);
+  const b = await c.body();
+  const form = { ...old, name: String(b.name || old.name).slice(0, 120), description: String(b.description || ''), fields: Array.isArray(b.fields) ? b.fields : [], checks: Array.isArray(b.checks) ? b.checks : [], access: b.access || {} };
+  const problems = FB.logic.lint(form);
+  if (problems.length) throw new HttpError(400, problems[0], { problems });
+  await c.db.batch([
+    c.db.prepare('UPDATE forms SET name = ?, description = ?, fields = ?, checks = ?, access = ?, updated_at = ? WHERE id = ?')
+      .bind(form.name, form.description, JSON.stringify(form.fields), JSON.stringify(form.checks), JSON.stringify(form.access), now(), form.id),
+    ...formViewSQL(form).map(s => c.db.prepare(s)),
+  ]);
+}, { admin: true });
+route('DELETE', '/api/admin/forms/:id', async (c, { id }) => {
+  const f = await c.form(id);
+  const used = (await all(c.db, 'SELECT name, graph FROM flows')).filter(fl => parse(fl.graph, { nodes: [] }).nodes.some(n => Number(n.formId) === f.id));
+  if (used.length) throw new HttpError(409, 'Form is used in flow: ' + used.map(u => u.name).join(', '));
+  await c.db.batch([c.db.prepare('DELETE FROM forms WHERE id = ?').bind(f.id), c.db.prepare(`DROP VIEW IF EXISTS ${qi('form_' + f.slug)}`)]);
+}, { admin: true });
+
+// ---------------------------------------------------------------- admin: flows
+route('GET', '/api/admin/flows', async (c) => {
+  const forms = (await c.forms()).map(f => f.id);
+  const stats = Object.fromEntries((await all(c.db, "SELECT flow_id, count(*) AS n, sum(status = 'running') AS r FROM instances GROUP BY flow_id")).map(r => [r.flow_id, r]));
+  return (await all(c.db, 'SELECT * FROM flows ORDER BY name')).map(f => {
+    const g = parse(f.graph, { nodes: [], edges: [] });
+    return { id: f.id, name: f.name, description: f.description, version: f.version, steps: g.nodes.length, issues: FB.logic.lintFlow(g, forms).length, runs: stats[f.id]?.n || 0, running: stats[f.id]?.r || 0 };
+  });
+}, { admin: true });
+route('GET', '/api/admin/flows/:id', async (c, { id }) => {
+  const f = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
+  if (!f) throw new HttpError(404, 'Flow not found');
+  return { ...f, graph: parse(f.graph, { nodes: [], edges: [] }), doc: parse(f.doc, {}) };
+}, { admin: true });
+route('POST', '/api/admin/flows', async (c) => {
+  const b = await c.body();
+  const graph = { nodes: [{ id: 'n1', type: 'start', name: 'Start', x: 80, y: 160 }, { id: 'n2', type: 'end', name: 'Done', x: 460, y: 160 }], edges: [{ id: 'e1', from: 'n1', to: 'n2' }] };
+  return { id: await run(c.db, 'INSERT INTO flows(name, description, graph, doc, version, updated_at) VALUES (?,?,?,?,1,?)', String(b.name || 'New process').slice(0, 120), '', JSON.stringify(graph), '{}', now()) };
+}, { admin: true });
+route('PUT', '/api/admin/flows/:id', async (c, { id }) => {
+  const f = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
+  if (!f) throw new HttpError(404, 'Flow not found');
+  const b = await c.body();
+  const graph = JSON.stringify(b.graph || { nodes: [], edges: [] });
+  const version = graph !== f.graph ? f.version + 1 : f.version; // running processes keep their own snapshot
+  await run(c.db, 'UPDATE flows SET name = ?, description = ?, graph = ?, doc = ?, version = ?, updated_at = ? WHERE id = ?',
+    String(b.name || f.name).slice(0, 120), String(b.description || ''), graph, JSON.stringify(b.doc || {}), version, now(), f.id);
+  return { version, issues: FB.logic.lintFlow(b.graph, (await c.forms()).map(x => x.id)) };
+}, { admin: true });
+route('DELETE', '/api/admin/flows/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM flows WHERE id = ?', Number(id)); }, { admin: true });
+
+// ---------------------------------------------------------------- admin: people & tags
+route('GET', '/api/admin/people', async (c) => {
+  const D = await c.dir();
+  return { people: [...D.persons.values()].map(p => ({ ...p, tagIds: [...D.tagIdsOf(p.id)] })), tags: [...D.tags.values()], categories: D.categories() };
+}, { admin: true });
+async function savePerson(c, pid, b) {
+  const email = String(b.email || '').trim(), name = String(b.name || '').trim();
+  if (!name || !/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, 'Name and a valid e-mail are required');
+  if (await first(c.db, 'SELECT 1 FROM persons WHERE email = ? AND id != ?', email, pid || 0)) throw new HttpError(409, 'E-mail already in use');
+  if (b.password && String(b.password).length < 8) throw new HttpError(400, 'Use a password of at least 8 characters');
+  if (!pid && !b.password) throw new HttpError(400, 'Set a password for the new person');
+  if (pid === c.user.id && (!b.is_admin || !b.active)) throw new HttpError(400, 'You cannot remove your own admin rights or deactivate yourself');
+  const hash = b.password ? await hashPassword(String(b.password)) : null;
+  let id = pid;
+  if (!pid) id = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at) VALUES (?,?,?,?,?,?)', name, email, hash, b.is_admin ? 1 : 0, b.active === false ? 0 : 1, now());
+  const st = [];
+  if (pid) {
+    st.push(c.db.prepare(`UPDATE persons SET name = ?, email = ?, is_admin = ?, active = ?${hash ? ', pw_hash = ?' : ''} WHERE id = ?`).bind(...[name, email, b.is_admin ? 1 : 0, b.active ? 1 : 0].concat(hash ? [hash] : [], [pid])));
+    if (hash || !b.active) st.push(c.db.prepare('DELETE FROM sessions WHERE person_id = ? AND ? = 0').bind(pid, pid === c.user.id ? 1 : 0));
+  }
+  st.push(c.db.prepare('DELETE FROM person_tags WHERE person_id = ?').bind(id));
+  for (const tid of (b.tagIds || []).map(Number).filter(Number.isInteger)) st.push(c.db.prepare('INSERT OR IGNORE INTO person_tags(person_id, tag_id) VALUES (?,?)').bind(id, tid));
+  await c.db.batch(st);
+  return { id };
+}
+route('POST', '/api/admin/people', async (c) => savePerson(c, null, await c.body()), { admin: true });
+route('PUT', '/api/admin/people/:id', async (c, { id }) => savePerson(c, Number(id), await c.body()), { admin: true });
+route('POST', '/api/admin/tags', async (c) => {
+  const b = await c.body();
+  const cat = String(b.category || '').trim().slice(0, 60), val = String(b.value || '').trim().slice(0, 80);
+  if (!cat || !val) throw new HttpError(400, 'Category and value are required');
+  await run(c.db, 'INSERT OR IGNORE INTO tags(category, value) VALUES (?,?)', cat, val);
+}, { admin: true });
+route('DELETE', '/api/admin/tags/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM tags WHERE id = ?', Number(id)); }, { admin: true });
+
+// ---------------------------------------------------------------- admin: SQL, settings, export
+route('GET', '/api/admin/catalog', async (c) => {
+  const objs = await all(c.db, "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT IN ('sessions', 'd1_migrations') ORDER BY type DESC, name");
+  const res = await c.db.batch(objs.map(o => c.db.prepare(`PRAGMA table_info(${qi(o.name)})`)));
+  return objs.map((o, i) => ({ ...o, columns: res[i].results.map(r => r.name).filter(n => n !== 'pw_hash') }));
+}, { admin: true });
+route('POST', '/api/admin/sql', async (c) => {
+  const sql = String((await c.body()).sql || '').trim();
+  if (!sql) throw new HttpError(400, 'Empty query');
+  if (/\b(sessions|pw_hash)\b/i.test(sql)) throw new HttpError(400, 'Passwords and sessions are protected.');
+  const t0 = Date.now();
+  try { const r = await tabular(c.db, sql); return { ...r, ms: Date.now() - t0 }; }
+  catch (e) { throw new HttpError(400, e.message.replace(/^D1_ERROR: /, '')); }
+}, { admin: true });
+route('GET', '/api/admin/settings', async (c) => c.settings(), { admin: true });
+route('PUT', '/api/admin/settings', async (c) => {
+  const b = await c.body();
+  const st = [];
+  const set = (k, v) => st.push(c.db.prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, v));
+  if (b.company != null) set('company', String(b.company).slice(0, 80));
+  if (b.color != null) { if (b.color && !/^#[0-9a-f]{6}$/i.test(b.color)) throw new HttpError(400, 'Colour must look like #4f46e5'); set('color', b.color); }
+  if (b.notify_webhook != null) { if (b.notify_webhook && !/^https:\/\//.test(b.notify_webhook)) throw new HttpError(400, 'Webhook must start with https://'); set('notify_webhook', b.notify_webhook); }
+  if (st.length) await c.db.batch(st);
+}, { admin: true });
+route('GET', '/api/admin/export', async (c) => {
+  const out = { exported_at: now(), tables: {} };
+  for (const t of ['settings', 'tags', 'forms', 'flows', 'dashboards', 'instances', 'tasks', 'submissions', 'events']) out.tables[t] = await all(c.db, `SELECT * FROM ${t}`);
+  out.tables.persons = await all(c.db, 'SELECT id, name, email, is_admin, active, created_at FROM persons');
+  out.tables.person_tags = await all(c.db, 'SELECT * FROM person_tags');
+  return new Response(JSON.stringify(out, null, 1), { headers: { 'content-type': 'application/json', 'content-disposition': `attachment; filename="ordovia-${now().slice(0, 10)}.json"`, 'cache-control': 'no-store' } });
+}, { admin: true });
+

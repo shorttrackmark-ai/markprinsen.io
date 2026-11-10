@@ -1,0 +1,17 @@
+{
+  "name": "ordovia",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Ordovia – processes, forms, handbook and dashboards on one SQL database (Cloudflare Workers + D1).",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler d1 migrations apply ordovia --local && wrangler dev",
+    "db:migrate:local": "wrangler d1 migrations apply ordovia --local",
+    "db:migrate:remote": "wrangler d1 migrations apply ordovia --remote",
+    "deploy": "wrangler d1 migrations apply ordovia --remote && wrangler deploy",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.40.0"
+  }
+}
