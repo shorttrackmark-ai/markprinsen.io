@@ -86,15 +86,16 @@
     main.innerHTML = `<div class="page"><div class="page-head"><div><h1>Areas</h1><p class="muted">Every department or domain, with the processes, forms and dashboards it offers to the rest of the company.</p></div>
       ${FB.isAdmin() ? '<div class="actions"><a class="btn" href="#/admin/areas">Manage areas</a></div>' : ''}</div>
       <div class="cards">${list.map(a => `<a class="card link-card area-card" href="#/area/${a.id}" style="--ac:${esc(a.color || '#4f46e5')}"><h3>${esc(a.name)}</h3><p class="small">${esc(a.description || '')}</p>
-        <p class="muted small">${a.owner ? 'Owner: ' + esc(a.owner) + ' · ' : ''}${a.flows} process${a.flows === 1 ? '' : 'es'} · ${a.forms} form${a.forms === 1 ? '' : 's'} · ${a.dashboards} dashboard${a.dashboards === 1 ? '' : 's'}</p></a>`).join('') ||
+        <p class="muted small">${a.owner ? 'Owner: ' + esc(a.owner) + ' · ' : ''}${a.flows} process${a.flows === 1 ? '' : 'es'} · ${a.forms} form${a.forms === 1 ? '' : 's'} · ${a.documents || 0} document${a.documents === 1 ? '' : 's'} · ${a.dashboards} dashboard${a.dashboards === 1 ? '' : 's'}</p></a>`).join('') ||
         `<div class="empty-state card"><p>No areas yet.</p>${FB.isAdmin() ? '<p><a class="btn primary" href="#/admin/areas">Create the first area</a></p>' : ''}</div>`}</div></div>`;
   });
 
   FB.route('/area/:id', async (main, { id }) => {
     const aid = Number(id), a = areaOf(aid);
     if (!a) { main.innerHTML = '<div class="page"><h1>Not found</h1><p class="muted">This area does not exist.</p></div>'; return; }
-    const [hb, home, dash] = await Promise.all([api.get('/handbook'), api.get('/home'), api.get('/dashboards')]);
+    const [hb, home, dash, docs] = await Promise.all([api.get('/handbook'), api.get('/home'), api.get('/dashboards'), api.get('/documents')]);
     const startable = new Map(home.flows.map(f => [f.id, f]));
+    const areaDocs = docs.filter(d => d.area_id === aid && d.status !== 'archived');
     const flows = hb.filter(f => f.area_id === aid), forms = FB.state.meta.forms.filter(f => f.area_id === aid && f.status !== 'archived'), dashes = dash.filter(d => d.area_id === aid);
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/areas">← Areas</a><h1><span class="dot" style="background:${esc(a.color || '#4f46e5')}"></span> ${esc(a.name)}</h1>
       <p class="muted">${esc(a.description || '')}${a.owner_id ? ` · owner ${esc(Org.personName(a.owner_id))}` : ''}</p></div></div>
@@ -102,6 +103,7 @@
         <p class="small">${esc(f.doc.purpose || f.description || '')}</p><p class="muted small">${f.owner ? 'Owner: ' + esc(f.owner) + ' · ' : ''}v${f.version}${f.overdue ? ' · <span class="warn-text">review due</span>' : ''}</p>
         <div class="row-actions">${startable.has(f.id) ? `<button class="btn small primary" data-start="${f.id}">Start</button>` : ''}<a class="btn small" href="#/handbook/${f.id}">How it works</a></div></div>`).join('') || '<p class="muted">No processes in this area yet.</p>'}</div></section>
       <section><h2>Data <span class="count">${forms.length}</span></h2><div class="cards">${forms.map(f => `<a class="card link-card" href="#/data/${f.id}"><h3>${esc(f.name)}</h3><p class="small">${esc(f.description || '')}</p></a>`).join('') || '<p class="muted">No forms in this area.</p>'}</div></section>
+      <section><h2>Documents <span class="count">${areaDocs.length}</span></h2>${areaDocs.length ? FB.org.docLinks(areaDocs) : '<p class="muted">No documents in this area.</p>'}</section>
       <section><h2>Dashboards <span class="count">${dashes.length}</span></h2><div class="cards">${dashes.map(d => `<a class="card link-card" href="#/dashboards/${d.id}"><h3>${esc(d.name)}</h3><p class="muted small">${d.widgets} widget${d.widgets === 1 ? '' : 's'}</p></a>`).join('') || '<p class="muted">No dashboards in this area.</p>'}</div></section></div>`;
     $$('[data-start]', main).forEach(b => b.onclick = () => Org.start(startable.get(Number(b.dataset.start)), b));
   });

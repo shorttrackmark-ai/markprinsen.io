@@ -8,15 +8,16 @@ export const DEMO_PASSWORD = 'demo1234';
 export const DEMO_ADMIN = { name: 'Demo Admin', email: 'demo@example.com' };
 
 /** The public example only: wipe everything and seed the demo company again. */
-export async function resetDemo(db) {
+export async function resetDemo(db, bucket) {
+  if (bucket) { try { let cur; do { const l = await bucket.list({ cursor: cur, limit: 500 }); if (l.objects.length) await bucket.delete(l.objects.map(o => o.key)); cur = l.truncated ? l.cursor : null; } while (cur); } catch (e) { console.warn('bucket clean failed', e.message); } }
   const views = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'view' AND name LIKE 'form\\_%' ESCAPE '\\'").all()).results;
-  const order = ['audit', 'flow_versions', 'events', 'tasks', 'submissions', 'instances', 'dashboards', 'flows', 'forms', 'api_tokens', 'person_tags', 'tags', 'sessions', 'areas', 'persons', 'settings'];
+  const order = ['audit', 'document_versions', 'documents', 'files', 'flow_versions', 'events', 'tasks', 'submissions', 'instances', 'dashboards', 'flows', 'forms', 'api_tokens', 'person_tags', 'tags', 'sessions', 'areas', 'persons', 'settings'];
   await db.batch([...views.map(v => db.prepare('DROP VIEW IF EXISTS "' + v.name + '"')), ...order.map(t => db.prepare('DELETE FROM ' + t))]);
-  return seedDemo(db, { ...DEMO_ADMIN, hash: await hashPassword(DEMO_PASSWORD) });
+  return seedDemo(db, { ...DEMO_ADMIN, hash: await hashPassword(DEMO_PASSWORD) }, bucket);
 }
 
-export async function seedDemo(db, admin) {
-  const M = { flow_versions: [], areas: [], settings: [], persons: [], tags: [], person_tags: [], forms: [], flows: [], instances: [], tasks: [], submissions: [], events: [], dashboards: [] };
+export async function seedDemo(db, admin, bucket) {
+  const M = { files: [], documents: [], document_versions: [], flow_versions: [], areas: [], settings: [], persons: [], tags: [], person_tags: [], forms: [], flows: [], instances: [], tasks: [], submissions: [], events: [], dashboards: [] };
   const nextId = {}; const id = (t) => (nextId[t] = (nextId[t] || 0) + 1);
   let clock = Date.now();
   const at = () => new Date(clock).toISOString().slice(0, 19).replace('T', ' ');
@@ -305,6 +306,26 @@ export async function seedDemo(db, admin) {
     { id: 'w9', title: 'Average approval time (hours)', type: 'hbar', w: 1, mode: 'sql', sql: "SELECT task, round(avg(hours_open), 1) AS hours\nFROM v_tasks WHERE status = 'done' AND task LIKE '%approval%'\nGROUP BY 1 ORDER BY 2 DESC", suffix: ' h' },
     { id: 'w10', title: 'Order register', type: 'table', w: 2, mode: 'sql', sql: 'SELECT id AS "#", substr(created_at, 1, 10) AS date, item, supplier, amount AS "€ incl. VAT", status, pay_before\nFROM form_order_register ORDER BY id DESC LIMIT 8' },
   ]) });
+  // ---- the document library: norms, policies and work instructions, linked to the steps where they matter ----
+  const LIB = [
+    { name: 'Leave policy', kind: 'policy', area: 'hr', owner: 'admin', file: 'leave-policy.txt', link: ['Leave request', 'Manager approval'],
+      text: 'LEAVE POLICY\n\n1. Every employee has 25 days of leave a year.\n2. Up to 3 working days: register the request, no approval needed.\n3. More than 3 working days: approval by your own manager, at least two weeks in advance.\n4. Sickness is reported to your manager on the first day, by phone.\n5. A request is answered within 2 working days.\n' },
+    { name: 'Purchasing norm: approval limits', kind: 'norm', area: 'fin', owner: 'eva', file: 'purchasing-norm.txt', link: ['Purchase request', 'Finance approval'],
+      text: 'PURCHASING NORM\n\nApproval limits per purchase:\n- up to EUR 250: no approval\n- EUR 250 to 1,000: budget holder\n- above EUR 1,000: budget holder and Finance\n\nOnly buy from approved suppliers (see register Supplier). Keep the quote with the request.\nInvoices are paid within the supplier payment term.\n' },
+    { name: 'Incident handling: work instruction', kind: 'instruction', area: 'ops', owner: 'daan', file: 'incident-instruction.txt', link: ['Incident & corrective action', 'Root cause & action'],
+      text: 'WORK INSTRUCTION: INCIDENTS\n\n1. Make the situation safe first.\n2. Report the incident in Ordovia the same day: what, where, risk (low, medium, high).\n3. Medium and high risks get a root-cause analysis within 5 days (5x why).\n4. Agree a corrective action, an owner and a date; check the effect after 30 days.\n' },
+    { name: 'ISO 9001 quality manual (summary)', kind: 'norm', area: 'ops', owner: 'daan', file: 'iso9001-summary.txt', link: [],
+      text: 'ISO 9001 – SUMMARY FOR OUR TEAMS\n\nWe keep documented information, control changes, review processes at least yearly, handle non-conformities with corrective action and measure customer satisfaction.\n' },
+  ];
+  for (const d of LIB) {
+    const did = id('documents'), fid = id('files'), key = 'seed/' + slugify(d.name);
+    if (bucket) await bucket.put(key, d.text, { httpMetadata: { contentType: 'text/plain' } });
+    M.files.push({ id: fid, key, name: d.file, mime: 'text/plain', size: d.text.length, uploaded_by: P[d.owner], created_at: at(), attached_at: at() });
+    M.documents.push({ id: did, name: d.name, kind: d.kind, description: '', area_id: A[d.area], owner_id: P[d.owner], status: 'active', version: 1, review_months: 12, reviewed_at: at(), created_at: at(), updated_at: at() });
+    M.document_versions.push({ id: id('document_versions'), document_id: did, version: 1, file_id: fid, note: 'First version', uploaded_by: P[d.owner], uploaded_at: at() });
+    if (d.link.length) { const fl = M.flows.find(x => x.name === d.link[0]); const g = typeof fl.graph === 'string' ? JSON.parse(fl.graph) : fl.graph; const nd = g.nodes.find(n => n.name === d.link[1]); if (nd) { nd.docIds = (nd.docIds || []).concat(did); fl.graph = g; } }
+  }
+
   M.settings.push({ key: 'demo', value: '1' });
 
   // ---- who owns what, and in which area ----
@@ -328,6 +349,9 @@ export async function seedDemo(db, admin) {
     submissions: ['id', 'form_id', 'person_id', 'instance_id', 'task_id', 'data', 'created_at', 'updated_at'],
     events: ['id', 'instance_id', 'person_id', 'message', 'created_at'],
     flow_versions: ['id', 'flow_id', 'version', 'name', 'graph', 'doc', 'saved_at', 'saved_by'],
+    files: ['id', 'key', 'name', 'mime', 'size', 'uploaded_by', 'created_at', 'attached_at'],
+    documents: ['id', 'name', 'kind', 'description', 'area_id', 'owner_id', 'status', 'version', 'review_months', 'reviewed_at', 'created_at', 'updated_at'],
+    document_versions: ['id', 'document_id', 'version', 'file_id', 'note', 'uploaded_by', 'uploaded_at'],
     dashboards: ['id', 'name', 'widgets', 'access', 'area_id', 'status', 'owner_id', 'updated_at'],
   };
   const stmts = [];

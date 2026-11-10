@@ -8,7 +8,7 @@
     text: { label: 'Text', icon: 'Aa' }, textarea: { label: 'Long text', icon: '¶' }, number: { label: 'Number', icon: '#' },
     email: { label: 'E-mail', icon: '@' }, date: { label: 'Date', icon: '▦' }, select: { label: 'Dropdown', icon: '▾' },
     radio: { label: 'Choice', icon: '◉' }, checkbox: { label: 'Yes / no', icon: '☑' }, person: { label: 'Person', icon: '☺' },
-    record: { label: 'Link to record', icon: '⛓' }, calc: { label: 'Calculation', icon: 'ƒ' }, heading: { label: 'Section heading', icon: 'H' },
+    record: { label: 'Link to record', icon: '⛓' }, file: { label: 'File upload', icon: '📎' }, calc: { label: 'Calculation', icon: 'ƒ' }, heading: { label: 'Section heading', icon: 'H' },
   };
   const Forms = { TYPES };
   FB.forms = Forms;
@@ -65,6 +65,7 @@
         case 'checkbox': input = `<label class="check"><input id="${id}" type="checkbox" name="${esc(f.key)}" ${v ? 'checked' : ''} ${dis}><span>${esc(f.checkLabel || 'Yes')}</span></label>`; break;
         case 'person': case 'record':
           input = `<select id="${id}" name="${esc(f.key)}" ${dis}><option value="">— choose ${f.type === 'person' ? 'person' : 'record'} —</option>${(options[f.key] || []).map(o => `<option value="${o.id}" ${Number(v) === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select>`; break;
+        case 'file': input = `<div class="file-field" data-file="${esc(f.key)}"><input type="hidden" name="${esc(f.key)}" value="${esc(v ?? '')}"><span class="file-name">${v && raw[f.key + '_label'] ? `<a href="/api/files/${esc(v)}" target="_blank" rel="noopener">${esc(raw[f.key + '_label'])}</a>` : '<span class="muted">No file chosen</span>'}</span>${ro ? '' : `<label class="btn small file-pick">Choose file<input type="file" hidden></label><button type="button" class="btn small ghost" data-fclear ${v ? '' : 'hidden'}>Remove</button>`}</div>`; break;
         case 'calc': input = `<output id="${id}" class="calc" data-calc="${esc(f.key)}"></output>`; break;
         default: input = `<input id="${id}" name="${esc(f.key)}" value="${esc(v ?? '')}" ${dis}>`;
       }
@@ -83,7 +84,7 @@
         if (!inp) continue;
         if (f.type === 'checkbox') raw[f.key] = inp.checked;
         else if (f.type === 'number') raw[f.key] = inp.value === '' ? null : Number(inp.value);
-        else if (f.type === 'person' || f.type === 'record') raw[f.key] = inp.value === '' ? null : Number(inp.value);
+        else if (f.type === 'person' || f.type === 'record' || f.type === 'file') raw[f.key] = inp.value === '' ? null : Number(inp.value);
         else raw[f.key] = inp.value === '' ? null : inp.value;
       }
     }
@@ -144,6 +145,24 @@
     });
     const cancel = $('[data-cancel]', root); if (cancel) cancel.onclick = () => opts.onCancel();
 
+    // file fields: upload at once (the file waits until the form is saved), show its name, allow removing it
+    for (const box of $$('[data-file]', root)) {
+      const key = box.dataset.file, hidden = $('input[type=hidden]', box), pick = $('input[type=file]', box), clear = $('[data-fclear]', box), nameEl = $('.file-name', box);
+      if (!pick) continue;
+      pick.onchange = async () => {
+        const file = pick.files[0]; if (!file) return;
+        if (file.size > 10 * 1024 * 1024) { toast('Files can be at most 10 MB.', 'error'); pick.value = ''; return; }
+        nameEl.innerHTML = '<span class="muted">Uploading…</span>';
+        try {
+          const r = await fetch('/api/files?name=' + encodeURIComponent(file.name) + '&type=' + encodeURIComponent(file.type || ''), { method: 'POST', headers: { 'x-ordovia': '1' }, credentials: 'same-origin', body: file });
+          const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Upload failed');
+          hidden.value = d.id; raw[key + '_label'] = d.name; nameEl.innerHTML = `<a href="/api/files/${d.id}" target="_blank" rel="noopener">${esc(d.name)}</a> <span class="muted small">${FB.ui.fmtSize(d.size)}</span>`; clear.hidden = false; read(); refresh();
+        } catch (err) { nameEl.innerHTML = '<span class="muted">No file chosen</span>'; hidden.value = ''; toast(err.message, 'error'); }
+        pick.value = '';
+      };
+      clear.onclick = () => { hidden.value = ''; delete raw[key + '_label']; nameEl.innerHTML = '<span class="muted">No file chosen</span>'; clear.hidden = true; read(); refresh(); };
+    }
+
     container.appendChild(root);
     read(); refresh();
     return { root, validate, input };
@@ -156,6 +175,7 @@
       let v = data[f.key];
       if ((f.type === 'person' || f.type === 'record') && data[f.key + '_label']) v = data[f.key + '_label'];
       if (v == null) return '';
+      if (f.type === 'file') return `<dt>${esc(f.label)}</dt><dd><a href="/api/files/${esc(v)}" target="_blank" rel="noopener">${esc(data[f.key + '_label'] || 'File')}</a></dd>`;
       return `<dt>${esc(f.label)}</dt><dd>${FB.ui.fmtVal(v)}</dd>`;
     }).join('')}</dl>`;
   };
@@ -284,7 +304,11 @@
         ${f.type === 'heading' ? '' : `<div class="row2"><label class="check"><input type="checkbox" data-p="required" ${f.required ? 'checked' : ''}><span>Required</span></label>
           <label class="check"><input type="checkbox" data-p="width" ${f.width === 'half' ? 'checked' : ''}><span>Half width</span></label></div>`}
         ${f.type === 'select' || f.type === 'radio' ? `<label>Options <small class="muted">(one per line)</small><textarea data-p="options" rows="4">${esc((f.options || []).join('\n'))}</textarea></label>` : ''}
-        ${f.type === 'number' ? `<div class="row2"><label>Min<input type="number" data-p="min" value="${esc(f.min ?? '')}"></label><label>Max<input type="number" data-p="max" value="${esc(f.max ?? '')}"></label></div>` : ''}
+        ${f.type === 'number' ? `<div class="row2"><label>Min<input type="number" data-p="min" value="${esc(f.min ?? '')}"></label><label>Max<input type="number" data-p="max" value="${esc(f.max ?? '')}"></label></div>
+          <label class="check"><input type="checkbox" data-p="integer" ${f.integer ? 'checked' : ''}><span>Whole numbers only</span></label>` : ''}
+        ${f.type === 'text' ? `<label>Format <small class="muted">(checked, and written in one standard way)</small><select data-p="format"><option value="">Free text</option>${Object.entries(FB.logic.FORMATS).map(([k, x]) => `<option value="${k}" ${f.format === k ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></label>
+          ${f.format ? '' : `<label>Required pattern <small class="muted">(regular expression, optional)</small><input data-p="pattern" class="mono" value="${esc(f.pattern || '')}" placeholder="e.g. ^[A-Z]{3}-[0-9]{4}$"></label>${f.pattern ? `<label>Message when it does not match<input data-p="patternMsg" value="${esc(f.patternMsg || '')}" placeholder="e.g. Use three letters, a dash and four digits"></label>` : ''}`}` : ''}
+        ${f.type === 'file' ? '<p class="hint">People upload a file (up to 10 MB: PDF, Office, images, text). It is stored with the record and opens from the data view. Not available in public web forms.</p>' : ''}
         ${f.type === 'checkbox' ? `<label>Checkbox text<input data-p="checkLabel" value="${esc(f.checkLabel || '')}" placeholder="Yes"></label>` : ''}
         ${f.type === 'calc' ? `<label>Formula <small class="muted">e.g. quantity * unit_price</small><textarea data-p="formula" rows="2" class="mono">${esc(f.formula || '')}</textarea></label>
           <label>Decimals<input type="number" data-p="decimals" value="${esc(f.decimals ?? '')}" min="0" max="6"></label>` : ''}

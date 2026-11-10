@@ -146,7 +146,7 @@ export function formViewSQL(form) {
     if (f.type === 'heading' || !FB.logic.KEY_RE.test(f.key || '') || used.has(f.key)) continue;
     used.add(f.key);
     cols.push(`json_extract(s.data, '$.${f.key}') AS ${qi(f.key)}`);
-    if ((f.type === 'person' || f.type === 'record') && !used.has(f.key + '_label')) { used.add(f.key + '_label'); cols.push(`json_extract(s.data, '$.${f.key}_label') AS ${qi(f.key + '_label')}`); }
+    if ((f.type === 'person' || f.type === 'record' || f.type === 'file') && !used.has(f.key + '_label')) { used.add(f.key + '_label'); cols.push(`json_extract(s.data, '$.${f.key}_label') AS ${qi(f.key + '_label')}`); }
   }
   return [`DROP VIEW IF EXISTS ${qi('form_' + form.slug)}`,
     `CREATE VIEW ${qi('form_' + form.slug)} AS SELECT ${cols.join(', ')} FROM submissions s LEFT JOIN persons p ON p.id = s.person_id WHERE s.form_id = ${Number(form.id)}`];

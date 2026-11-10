@@ -403,3 +403,12 @@ body.logged-out main { margin: 0; padding: 0; width: 100%; }
 .demo-pill { background: var(--warn); color: #fff; border-radius: 999px; padding: 1px 10px; font-size: 12px; font-weight: 700; }
 .demo-ctl select { padding: 4px 8px; }
 @media (max-width: 800px) { .demo-ctl select { display: none; } }
+
+/* ---------- documents, files ---------- */
+.doc-links { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.doc-links li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.step-docs { margin-top: 8px; padding: 8px 12px; background: var(--surface-2); border-radius: 8px; }
+.file-field { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.file-pick { cursor: pointer; }
+.filters select, .filters input[type=search] { width: auto; }
+.filters input[type=search] { min-width: 220px; }

@@ -92,3 +92,18 @@ test('engine: decisions, calculations, records and routing to the initiator\'s m
   assert.equal(small.proc.status, 'done');
   assert.equal(small.proc.vars.outcome, 'Done');
 });
+
+test('formats: one standard spelling, and checks on the server side of every form', () => {
+  const form = { fields: [
+    { key: 'iban', type: 'text', format: 'iban' }, { key: 'pc', type: 'text', format: 'postcode_nl' }, { key: 'url', type: 'text', format: 'url' },
+    { key: 'ref', type: 'text', pattern: '^INV-[0-9]{4}$', patternMsg: 'INV-1234' }, { key: 'n', type: 'number', integer: true },
+  ], checks: [] };
+  const good = FB.logic.finalize(form, { iban: 'nl91 abna 0417 1643 00', pc: '1234ab', url: 'https://example.com/x', ref: 'INV-1234', n: 3 }, {}, () => null);
+  assert.equal(good.ok, true);
+  assert.equal(good.data.iban, 'NL91ABNA0417164300');
+  assert.equal(good.data.pc, '1234 AB');
+  const bad = FB.logic.finalize(form, { iban: 'NL91ABNA0417164301', pc: '12', url: 'example.com', ref: 'x', n: 1.5 }, {}, () => null);
+  assert.deepEqual(Object.keys(bad.errors).sort(), ['iban', 'n', 'pc', 'ref', 'url']);
+  assert.equal(bad.errors.ref, 'INV-1234');
+  assert.ok(FB.logic.lint({ fields: [{ key: 'a', type: 'text', pattern: '(' }], checks: [] }).length);
+});

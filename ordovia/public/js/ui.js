@@ -67,7 +67,8 @@
     return `<select ${name} multiple size="${size || Math.min(7, Math.max(3, items.length))}">${items.map(i => `<option value="${esc(i.value)}" ${sel.has(String(i.value)) ? 'selected' : ''}>${esc(i.label)}</option>`).join('')}</select>`;
   }
 
-  FB.ui = { esc, $, $$, el, json, fmtDate, fmtVal, richText, toast, modal, download, toCSV, table, multiSelect };
+  const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B');
+  FB.ui = { esc, $, $$, el, json, fmtDate, fmtVal, fmtSize, richText, toast, modal, download, toCSV, table, multiSelect };
 
   // ---------- API client ----------
   class ApiError extends Error { constructor(status, data) { super(data && data.error || 'Request failed'); this.status = status; this.data = data || {}; } }

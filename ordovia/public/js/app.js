@@ -19,6 +19,7 @@
       ${link('#/areas', '◫', 'Areas', '/area')}
       ${link('#/processes', '⟳', 'Runs', '/processes')}
       ${link('#/handbook', '❖', 'Handbook', '/handbook')}
+      ${link('#/documents', '❏', 'Documents', '/documents')}
       ${link('#/data', '▦', 'Data', '/data')}
       ${link('#/dashboards', '▣', 'Dashboards', '/dashboards')}</div>
       ${FB.isAdmin() ? `<div class="nav-title">Build</div><div class="nav-group">
@@ -127,6 +128,7 @@
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/processes/${t.instance_id}">← ${esc(t.process)}</a><h1>${esc(t.name)}</h1>
       ${t.due_at ? `<p class="muted small">Due ${esc(fmtDate(t.due_at))}</p>` : ''}</div><span class="status s-${esc(t.status)}">${esc(t.status)}</span></div>
       ${d.instructions ? `<div class="card instructions"><h4>Work instruction</h4><p>${richText(d.instructions)}</p></div>` : ''}
+      ${(d.documents || []).length ? `<div class="card instructions"><h4>Documents for this step</h4>${FB.org.docLinks(d.documents)}</div>` : ''}
       <div class="two-col"><div class="card" id="taskForm"></div>
       <aside>${d.previous.length ? `<h3>Earlier in this process</h3>${d.previous.map(s => { const f = formById(s.form_id); return f ? `<div class="card prev"><div class="muted small">${esc(s.task_name || f.name)} · ${esc(s.who || 'automatic')} · ${esc(fmtDate(s.created_at))}</div>${FB.forms.summary(f, s.data)}</div>` : ''; }).join('')}` : '<p class="muted">This is the first step.</p>'}</aside></div></div>`;
     const box = $('#taskForm', main);
@@ -204,6 +206,7 @@
         ${s.responsible ? `<div class="small"><span class="muted">Responsible:</span> ${esc(s.responsible)}${s.dueHours ? ` · <span class="muted">within</span> ${s.dueHours} h` : ''}</div>` : ''}
         ${s.form ? `<div class="small"><span class="muted">Form:</span> ${esc(s.form)}</div>` : ''}
         ${s.instructions ? `<div class="step-instr">${richText(s.instructions)}</div>` : ''}
+        ${(s.documents || []).length ? `<div class="step-docs">${FB.org.docLinks(s.documents)}</div>` : ''}
         ${s.next.length > 1 ? `<div class="small muted">${s.next.map(n => `${esc(n.when || 'otherwise')} → ${esc(n.to)}`).join(' · ')}</div>` : ''}</li>`).join('')}</ol></div>`;
     const rv = $('#hbReview', main);
     if (rv) rv.onclick = async () => { try { await api.post(`/flows/${h.id}/review`); toast('Marked as reviewed', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); } };

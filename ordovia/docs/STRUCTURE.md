@@ -30,3 +30,11 @@ Integration: *API tokens* (act as a chosen person), *public web forms* (a servic
 - Form *kinds* (register / request / step) and hiding request/step forms inside their service.
 - Documents as a first-class thing (text first, files on R2 later).
 - Retention per class (archive finished runs after N months).
+
+## Files and documents (built)
+
+- **Files** live in R2 (`FILES` binding), their register in D1 (`files`). 10 MB per file; programs, web pages and scripts are refused; served with `nosniff` and a sandbox policy. A file is private to its uploader until it becomes part of a document or a saved record; loose uploads are removed after a day.
+- **Documents** (norms, policies, procedures, work instructions, templates): area, owner, status, review cycle, version history (each upload is a version and counts as a review). Linked to process steps (`Documents at this step`) so they appear in the task and in the handbook. Missing owner/area/review and broken step links show up in Health.
+- **File fields** in forms: the file is stored with the record and opens from the data view and the "earlier in this process" panel. Not available in public web forms.
+- **Formats**: a text field can be an IBAN, Dutch postcode, phone number, web address or code, or follow your own pattern; values are checked on the server and written in one standard spelling. Number fields can require whole numbers.
+- Health also warns when a formula uses a name that no earlier step provides (typo detector with "did you mean").

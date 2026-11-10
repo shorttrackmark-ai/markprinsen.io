@@ -46,6 +46,14 @@ const reply = (data, status = 200, headers = {}) => new Response(JSON.stringify(
   status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...headers },
 });
 
+/** Uploads that never became part of a record or a document (the form was abandoned) are removed after a day. */
+async function cleanLooseFiles(db, bucket) {
+  try {
+    const old = await all(db, 'SELECT id, key FROM files WHERE attached_at IS NULL AND created_at < ? LIMIT 100', new Date(Date.now() - 86400000).toISOString().slice(0, 19).replace('T', ' '));
+    for (const f of old) { if (bucket) await bucket.delete(f.key); await run(db, 'DELETE FROM files WHERE id = ?', f.id); }
+  } catch (e) { console.warn('file cleanup failed', e.message); }
+}
+
 export default {
   async fetch(req, env, exec) {
     const url = new URL(req.url);
@@ -82,7 +90,8 @@ export default {
   // Hourly: flag overdue tasks and send reminders to the notification webhook.
   async scheduled(event, env, exec) {
     const db = env.DB;
-    if (env.DEMO === '1') { await resetDemo(db); return; }   // (the example starts fresh every night)
+    if (env.DEMO === '1') { await resetDemo(db, env.FILES); return; }   // (the example starts fresh every night)
+    await cleanLooseFiles(db, env.FILES);
     const due = await all(db, `SELECT t.id, t.name, t.instance_id, i.title FROM tasks t JOIN instances i ON i.id = t.instance_id
       WHERE t.status = 'open' AND t.due_at IS NOT NULL AND t.due_at < ? AND t.reminded_at IS NULL LIMIT 40`, now());
     if (!due.length) return;
@@ -148,7 +157,7 @@ route('POST', '/api/setup', async (c) => {
     c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('company', ?)").bind(String(b.company || 'My company').slice(0, 80)),
   ]);
   let adminId;
-  if (b.demo) adminId = await seedDemo(c.db, { name, email, hash });
+  if (b.demo) adminId = await seedDemo(c.db, { name, email, hash }, c.env.FILES);
   else adminId = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at) VALUES (?,?,?,1,1,?)', name, email, hash, now());
   await startSession(c, adminId);
   return { ok: true };
@@ -180,6 +189,7 @@ route('GET', '/api/meta', async (c) => {
     categories: D.categories(),
     people: [...D.persons.values()].filter(p => p.active).map(p => ({ id: p.id, name: p.name, tagIds: [...D.tagIdsOf(p.id)] })),
     areas: await all(c.db, 'SELECT id, name, description, color, owner_id FROM areas ORDER BY name'),
+    documents: await all(c.db, "SELECT id, name, kind, area_id, status FROM documents WHERE status != 'archived' ORDER BY name"),
     forms: forms.filter(f => f.status !== 'archived' || c.user.is_admin).map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields, checks: f.checks, area_id: f.area_id, status: f.status, canView: canViewForm(c.user, D, f), canAdd: f.status === 'archived' ? false : canAddForm(c.user, D, f) })),
     openTasks: (await openTasksFor(c, c.user.id)).length,
   };
@@ -253,6 +263,7 @@ async function startRun(c, flow, opts) {
   io.log(opts.source === 'web' ? `Request received from the web form (${initiator.name}${initiator.email ? ', ' + initiator.email : ''})` : opts.source === 'api' ? `Started through the API by ${c.user.name}${ref ? ' (reference ' + ref + ')' : ''}` : `Started by ${c.user.name}`, starter);
   if (startForm) {
     tx.add('INSERT INTO submissions(form_id, person_id, instance_id, data, created_at) VALUES (?,?,?,?,?)', startForm.id, starter, iid, JSON.stringify(formRes.data), now());
+    for (const st of attachStatements(c, startForm, formRes.data, iid)) tx.stmts.push(st);
     mergeFormData(proc, startForm, formRes.data, formRes.linked);
   }
   advance(proc, s.id, io);
@@ -290,12 +301,19 @@ const publicVars = (vars) => { const o = { ...vars }; delete o.initiator; delete
 const runInfo = (proc, origin) => ({ id: proc.id, process: proc.flowName, status: proc.status, outcome: (proc.vars || {}).outcome ?? null, reference: proc.ref ?? null, url: origin + '/#/processes/' + proc.id });
 
 /** Validate a form submission on the server: types, lookups, calculations, rules. */
-async function finalizeForm(c, form, input, context) {
+async function finalizeForm(c, form, input, context, ownFiles) {
   const D = await c.dir();
   const ids = form.fields.filter(f => f.type === 'record' && input && input[f.key] != null && input[f.key] !== '').map(f => Number(input[f.key])).filter(Number.isInteger);
   const recs = ids.length ? await all(c.db, `SELECT id, form_id, data FROM submissions WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  const fileIds = form.fields.filter(f => f.type === 'file' && input && input[f.key] != null && input[f.key] !== '').map(f => Number(input[f.key])).filter(Number.isInteger);
+  const fileRows = fileIds.length ? await all(c.db, `SELECT id, name, uploaded_by, attached_at, form_id FROM files WHERE id IN (${fileIds.map(() => '?').join(',')})`, ...fileIds) : [];
   const forms = await c.formsMap();
   const lookup = (f, id) => {
+    if (f.type === 'file') {
+      // a file may be attached once: by the person who uploaded it (still loose), or it is already part of this form's records (editing)
+      const r = fileRows.find(x => x.id === id);
+      return r && ((!r.attached_at && c.user && r.uploaded_by === c.user.id) || (ownFiles && ownFiles.has(id))) ? { label: r.name, data: {} } : null;
+    }
     if (f.type === 'person') {
       const p = D.persons.get(id);
       return p && p.active && D.hasTags(id, f.personTags) ? { label: p.name, data: D.profile(id) } : null;
@@ -306,6 +324,11 @@ async function finalizeForm(c, form, input, context) {
     return { label: recordLabel(forms.get(r.form_id), r.id, data, f.recordLabel), data };
   };
   return FB.logic.finalize(form, input || {}, context || {}, lookup);
+}
+/** The statements that make the files of a saved record permanent (they belong to that form, and to the run if there is one). */
+function attachStatements(c, form, data, instanceId) {
+  return form.fields.filter(f => f.type === 'file' && Number.isInteger(data[f.key])).map(f =>
+    c.db.prepare('UPDATE files SET attached_at = COALESCE(attached_at, ?), form_id = ?, instance_id = COALESCE(?, instance_id) WHERE id = ?').bind(now(), form.id, instanceId ?? null, data[f.key]));
 }
 
 route('GET', '/api/tasks/:id', async (c, { id }) => {
@@ -322,6 +345,7 @@ route('GET', '/api/tasks/:id', async (c, { id }) => {
   return {
     task: { id: t.id, name: t.name, status: t.status, form_id: t.form_id, created_at: t.created_at, due_at: t.due_at, completed_at: t.completed_at, instance_id: t.iid, process: t.process },
     instructions: node.instructions || '',
+    documents: await docsByIds(c, node.docIds),
     assignee: D.describe(parse(t.assignee, {})),
     canComplete: t.status === 'open' && D.matches(c.user.id, parse(t.assignee, {}), inst),
     vars: parse(t.vars, {}),
@@ -348,6 +372,7 @@ route('POST', '/api/tasks/:id/complete', async (c, { id }) => {
     if (!res.ok) throw new HttpError(422, 'Please check the form', { errors: res.errors, formErrors: res.formErrors });
     tx.add('INSERT INTO submissions(form_id, person_id, instance_id, task_id, data, created_at) VALUES (?,?,?,?,?,?)', form.id, c.user.id, t.instance_id, t.id, JSON.stringify(res.data), now());
     tx.add('UPDATE tasks SET submission_id = last_insert_rowid() WHERE id = ?', t.id);
+    for (const st of attachStatements(c, form, res.data, t.instance_id)) tx.stmts.push(st);
     mergeFormData(proc, form, res.data, res.linked);
   }
   const io = await runtimeIO(c, tx, proc);
@@ -414,6 +439,7 @@ route('POST', '/api/forms/:id/records', async (c, { id }) => {
   const res = await finalizeForm(c, form, b.data, { initiator: D.profile(c.user.id) });
   if (!res.ok) throw new HttpError(422, 'Please check the form', { errors: res.errors, formErrors: res.formErrors });
   const rid = await run(c.db, 'INSERT INTO submissions(form_id, person_id, data, created_at) VALUES (?,?,?,?)', form.id, c.user.id, JSON.stringify(res.data), now());
+  const att = attachStatements(c, form, res.data, null); if (att.length) await c.db.batch(att);
   return { id: rid };
 });
 
@@ -437,9 +463,11 @@ route('PUT', '/api/records/:id', async (c, { id }) => {
   if (!s) throw new HttpError(404, 'Record not found');
   const form = await c.form(s.form_id), D = await c.dir();
   const b = await c.body();
-  const res = await finalizeForm(c, form, b.data, { initiator: D.profile(s.person_id || c.user.id) });
+  const own = new Set(form.fields.filter(f => f.type === 'file').map(f => parse(s.data, {})[f.key]).filter(Number.isInteger));
+  const res = await finalizeForm(c, form, b.data, { initiator: D.profile(s.person_id || c.user.id) }, own);
   if (!res.ok) throw new HttpError(422, 'Please check the form', { errors: res.errors, formErrors: res.formErrors });
   await run(c.db, 'UPDATE submissions SET data = ?, updated_at = ? WHERE id = ?', JSON.stringify(res.data), now(), s.id);
+  const att = attachStatements(c, form, res.data, s.instance_id); if (att.length) await c.db.batch(att);
 }, { admin: true });
 
 route('DELETE', '/api/records/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM submissions WHERE id = ?', Number(id)); }, { admin: true });
@@ -461,10 +489,12 @@ route('GET', '/api/handbook/:id', async (c, { id }) => {
     id: n.id, type: n.type, name: n.name, instructions: n.instructions || '',
     responsible: n.type === 'task' ? D.describe(n.assignee || { type: 'initiator' }) : '',
     form: n.formId && forms.get(Number(n.formId)) ? forms.get(Number(n.formId)).name : '',
-    dueHours: n.dueHours || null,
+    dueHours: n.dueHours || null, docIds: n.docIds || [],
     next: graph.edges.filter(e => e.from === n.id).map(e => ({ to: (graph.nodes.find(x => x.id === e.to) || {}).name, when: e.label || e.condition || '' })),
   }));
   const due = reviewDueAt(f);
+  const docMap = new Map((await docsByIds(c, [...new Set(steps.flatMap(x => x.docIds))])).map(d => [d.id, d]));
+  steps.forEach(x => { x.documents = x.docIds.map(i => docMap.get(i)).filter(Boolean); });
   return { id: f.id, name: f.name, description: f.description, doc: parse(f.doc, {}), version: f.version, updated_at: f.updated_at, graph, steps, stats,
     status: f.status, area_id: f.area_id, area: f.area_name || '', owner_id: f.owner_id, owner: f.owner_name || '', reviewMonths: f.review_months, reviewedAt: f.reviewed_at, reviewDue: due, overdue: !!(due && due < now().slice(0, 10)),
     canReview: !!(c.user.is_admin || (f.owner_id && f.owner_id === c.user.id)) };
@@ -721,7 +751,7 @@ route('PUT', '/api/admin/settings', async (c) => {
 }, { admin: true });
 route('GET', '/api/admin/export', async (c) => {
   const out = { exported_at: now(), tables: {} };
-  for (const t of ['settings', 'areas', 'tags', 'forms', 'flows', 'flow_versions', 'dashboards', 'instances', 'tasks', 'submissions', 'events', 'audit']) out.tables[t] = await all(c.db, `SELECT * FROM ${t}`);
+  for (const t of ['settings', 'areas', 'tags', 'forms', 'flows', 'flow_versions', 'dashboards', 'documents', 'document_versions', 'files', 'instances', 'tasks', 'submissions', 'events', 'audit']) out.tables[t] = await all(c.db, `SELECT * FROM ${t}`);
   out.tables.persons = await all(c.db, 'SELECT id, name, email, is_admin, active, created_at FROM persons');
   out.tables.person_tags = await all(c.db, 'SELECT * FROM person_tags');
   return new Response(JSON.stringify(out, null, 1), { headers: { 'content-type': 'application/json', 'content-disposition': `attachment; filename="ordovia-${now().slice(0, 10)}.json"`, 'cache-control': 'no-store' } });
@@ -761,7 +791,7 @@ route('DELETE', '/api/admin/areas/:id', async (c, { id }) => {
 }, { admin: true });
 
 // ---------------------------------------------------------------- audit log: who changed what, when
-const ENTITY = { forms: 'form', flows: 'process', dashboards: 'dashboard', people: 'person', tags: 'tag', areas: 'area', settings: 'settings', sql: 'sql', records: 'record', instances: 'run', tokens: 'api token' };
+const ENTITY = { forms: 'form', flows: 'process', dashboards: 'dashboard', people: 'person', tags: 'tag', areas: 'area', settings: 'settings', sql: 'sql', records: 'record', instances: 'run', tokens: 'api token', documents: 'document' };
 async function logAudit(c, action, entity, entityId, name, detail) {
   try { await run(c.db, 'INSERT INTO audit(at, person_id, action, entity, entity_id, name, detail) VALUES (?,?,?,?,?,?,?)', now(), c.user ? c.user.id : null, action, entity, entityId ?? null, name ? String(name).slice(0, 200) : null, detail ? String(detail).slice(0, 400) : null); }
   catch (e) { console.warn('audit failed', e.message); }
@@ -795,6 +825,13 @@ route('GET', '/api/admin/health', async (c) => {
   const add = (level, kind, title, detail, link, fix) => items.push({ level, kind, title, detail: detail || '', link: link || '', ...(fix || {}) });
   const liveForms = forms.filter(f => f.status !== 'archived');
   const flows = await all(c.db, 'SELECT * FROM flows WHERE status != ? ORDER BY name', 'archived');
+  const docs = await all(c.db, 'SELECT * FROM documents'), docById = new Map(docs.map(d => [d.id, d]));
+  for (const d of docs.filter(x => x.status === 'active')) {
+    const due = reviewDueAt(d), link = '#/documents/' + d.id;
+    if (due && due < today) add('warn', 'review', 'Document “' + d.name + '” is due for review', 'Review was due ' + due, link);
+    if (!d.owner_id) add('warn', 'ownership', 'Document “' + d.name + '” has no owner', '', link);
+    if (!d.area_id) add('info', 'structure', 'Document “' + d.name + '” is in no area', '', link, { entity: 'document', id: d.id });
+  }
   const usedForms = new Set();
   for (const f of flows) {
     const g = parse(f.graph, { nodes: [], edges: [] });
@@ -807,6 +844,8 @@ route('GET', '/api/admin/health', async (c) => {
       if (rule.type === 'person' && !(D.persons.get(Number(rule.personId)) || {}).active) add(f.status === 'active' ? 'error' : 'warn', 'routing', f.name + ' · “' + n.name + '” goes to a person who is gone or inactive', D.describe(rule), link);
       if (rule.type === 'tags' && (rule.tagIds || []).length && ![...D.persons.values()].some(p => p.active && D.hasTags(p.id, rule.tagIds))) add(f.status === 'active' ? 'error' : 'warn', 'routing', f.name + ' · “' + n.name + '” has nobody to go to', 'No active person matches: ' + D.describe(rule), link);
     }
+    for (const u of unknownVariables(g, forms)) add(f.status === 'active' ? 'warn' : 'info', 'data', f.name + ': “' + u.name + '” is used in ' + u.where + ' but no earlier step provides it', u.hint ? 'Did you mean ' + u.hint + '?' : 'Check the spelling, or add a form field or calculation with this name', link);
+    for (const n of g.nodes) for (const did of (n.docIds || [])) { const dd = docById.get(Number(did)); if (!dd || dd.status === 'archived') add('warn', 'document', f.name + ' · “' + n.name + '” points to a document that is gone or archived', '', link); }
     const st = g.nodes.find(n => n.type === 'start');
     if (f.status === 'active' && st && (st.startTags || []).length && ![...D.persons.values()].some(p => p.active && D.hasTags(p.id, st.startTags))) add('warn', 'routing', f.name + ' cannot be started by anyone but admins', 'Nobody has the tags that may start it', link);
     if (f.status === 'active' && !f.owner_id) add('warn', 'ownership', f.name + ' has no owner', 'Every process needs a person who keeps it right', link);
@@ -852,6 +891,7 @@ route('GET', '/api/search', async (c) => {
     if (f.name.toLowerCase().includes(lq) || String(f.description || '').toLowerCase().includes(lq) || f.fields.some(x => String(x.label || '').toLowerCase().includes(lq))) add('Form', f.name, areas.get(f.area_id) || '', '#/data/' + f.id);
   }
   for (const d of await all(c.db, "SELECT id, name, area_id, access, status FROM dashboards WHERE (status != 'archived' OR ? = 1) AND name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 8", adm, pat)) if (tagRule(c.user, D, parse(d.access, {}).viewTags)) add('Dashboard', d.name, areas.get(d.area_id) || '', '#/dashboards/' + d.id);
+  for (const d of await all(c.db, "SELECT id, name, kind, area_id FROM documents WHERE (status != 'archived' OR ? = 1) AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\') ORDER BY name LIMIT 8", adm, pat, pat)) add('Document', d.name, [d.kind, areas.get(d.area_id)].filter(Boolean).join(' · '), '#/documents/' + d.id);
   for (const a of await all(c.db, "SELECT id, name, description FROM areas WHERE name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' LIMIT 5", pat, pat)) add('Area', a.name, a.description, '#/area/' + a.id);
   for (const p of [...D.persons.values()].filter(p => p.active && (p.name.toLowerCase().includes(q.toLowerCase()) || p.email.toLowerCase().includes(q.toLowerCase()))).slice(0, 6)) add('Person', p.name, D.tagsOf(p.id).map(t => t.value).join(' · '), '');
   const insts = await all(c.db, "SELECT i.id, i.title, i.status, i.started_by FROM instances i WHERE i.title LIKE ? ESCAPE '\\' ORDER BY i.id DESC LIMIT 30", pat);
@@ -975,6 +1015,7 @@ route('POST', '/api/v1/forms/:slug/records', async (c, { slug }) => {
   const res = await finalizeForm(c, form, b.data, { initiator: D.profile(c.user.id) });
   if (!res.ok) throw new HttpError(422, 'Please check the data', { errors: res.errors, formErrors: res.formErrors });
   const rid = await run(c.db, 'INSERT INTO submissions(form_id, person_id, data, created_at) VALUES (?,?,?,?)', form.id, c.user.id, JSON.stringify(res.data), now());
+  const att = attachStatements(c, form, res.data, null); if (att.length) await c.db.batch(att);
   return new Response(JSON.stringify({ id: rid, data: res.data }), { status: 201, headers: { 'content-type': 'application/json; charset=utf-8' } });
 });
 route('GET', '/api/v1/ping', async (c) => ({ ok: true, as: c.user.name }));
@@ -982,7 +1023,7 @@ route('GET', '/api/v1/ping', async (c) => ({ ok: true, as: c.user.name }));
 // ---------------------------------------------------------------- the public example (only where DEMO=1)
 const PERSONAS = { admin: DEMO_ADMIN.email, anna: 'anna@example.com', bram: 'bram@example.com', sanne: 'sanne@example.com', carla: 'carla@example.com', daan: 'daan@example.com', eva: 'eva@example.com' };
 async function ensureDemoData(c) {
-  if (!(await first(c.db, 'SELECT id FROM persons LIMIT 1'))) { await resetDemo(c.db); await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now())); }
+  if (!(await first(c.db, 'SELECT id FROM persons LIMIT 1'))) { await resetDemo(c.db, c.env.FILES); await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now())); }
 }
 route('POST', '/api/demo/enter', async (c) => {
   if (!DEMO) throw new HttpError(404, 'Not available');
@@ -999,14 +1040,14 @@ route('POST', '/api/demo/reset', async (c) => {
   const nowMs = Date.now();
   const seeded = await first(c.db, "SELECT value FROM settings WHERE key = 'demo_seeded_at'");
   if (seeded && nowMs - Number(seeded.value) < 10 * 60000) throw new HttpError(429, 'The example was reset a moment ago. Try again in a few minutes.');
-  await resetDemo(c.db);
+  await resetDemo(c.db, c.env.FILES);
   await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now()));
   return { ok: true };
 }, { public: true });
 
 route('POST', '/api/admin/assign-area', async (c) => {
   const b = await c.body();
-  const table = { flow: 'flows', form: 'forms', dashboard: 'dashboards' }[b.entity];
+  const table = { flow: 'flows', form: 'forms', dashboard: 'dashboards', document: 'documents' }[b.entity];
   if (!table) throw new HttpError(400, 'Unknown item type');
   const row = await first(c.db, 'SELECT id, name FROM ' + table + ' WHERE id = ?', Number(b.id));
   if (!row) throw new HttpError(404, 'Item not found');
@@ -1025,3 +1066,164 @@ route('POST', '/api/admin/areas/starter', async (c) => {
   c.note('Starter areas', starter.map(x => x[0]).join(', '));
   return { ok: true };
 }, { admin: true });
+
+// ---------------------------------------------------------------- files (bytes in R2, register in D1)
+const MAX_FILE = 10 * 1024 * 1024;
+const INLINE_OK = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'text/plain']);
+const EXT_MIME = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', txt: 'text/plain', md: 'text/plain', csv: 'text/csv',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', zip: 'application/zip', json: 'application/json', xml: 'application/xml' };
+const BLOCKED_EXT = /\.(exe|bat|cmd|com|scr|msi|js|mjs|vbs|ps1|sh|jar|html?|svg|php)$/i;
+const safeName = (n) => (String(n || 'file').replace(/[\\/:*?"<>|\r\n]+/g, '_').trim().slice(0, 150)) || 'file';
+const mimeFor = (name, given) => { const ext = (/\.([a-z0-9]+)$/i.exec(name) || [])[1]; return EXT_MIME[(ext || '').toLowerCase()] || (given && /^[a-z]+\/[a-z0-9.+-]+$/i.test(given) && !/html|svg|javascript|xml/i.test(given) ? given : 'application/octet-stream'); };
+
+route('POST', '/api/files', async (c) => {
+  if (!c.env.FILES) throw new HttpError(503, 'File storage is not set up (R2 binding FILES).');
+  const name = safeName(c.url.searchParams.get('name'));
+  if (BLOCKED_EXT.test(name)) throw new HttpError(415, 'This kind of file is not allowed (programs, web pages and scripts).');
+  if (Number(c.req.headers.get('content-length') || 0) > MAX_FILE) throw new HttpError(413, 'Files can be at most 10 MB.');
+  const loose = (await first(c.db, 'SELECT count(*) AS n FROM files WHERE uploaded_by = ? AND attached_at IS NULL AND created_at > ?', c.user.id, new Date(Date.now() - 86400000).toISOString().slice(0, 19).replace('T', ' '))).n;
+  if (loose >= 40) throw new HttpError(429, 'Too many unused uploads: finish or cancel the forms you have open first.');
+  const buf = await c.req.arrayBuffer();
+  if (!buf.byteLength) throw new HttpError(400, 'The file is empty.');
+  if (buf.byteLength > MAX_FILE) throw new HttpError(413, 'Files can be at most 10 MB.');
+  const key = 'f/' + randomToken().slice(0, 32), mime = mimeFor(name, c.url.searchParams.get('type'));
+  await c.env.FILES.put(key, buf, { httpMetadata: { contentType: mime } });
+  const id = await run(c.db, 'INSERT INTO files(key, name, mime, size, uploaded_by, created_at) VALUES (?,?,?,?,?,?)', key, name, mime, buf.byteLength, c.user.id, now());
+  return { id, name, size: buf.byteLength, mime };
+});
+
+async function canReadFile(c, f) {
+  if (c.user.is_admin || f.uploaded_by === c.user.id) return true;
+  if (await first(c.db, "SELECT 1 FROM document_versions v JOIN documents d ON d.id = v.document_id WHERE v.file_id = ? AND d.status != 'archived'", f.id)) return true;
+  if (f.form_id) { const form = (await c.forms()).find(x => x.id === f.form_id); if (form && canViewForm(c.user, await c.dir(), form)) return true; }
+  if (f.instance_id) { const inst = await first(c.db, 'SELECT * FROM instances WHERE id = ?', f.instance_id); if (inst && await canSeeInstance(c, inst)) return true; }
+  return false;
+}
+route('GET', '/api/files/:id', async (c, { id }) => {
+  const f = await first(c.db, 'SELECT * FROM files WHERE id = ?', Number(id));
+  if (!f) throw new HttpError(404, 'File not found');
+  if (!(await canReadFile(c, f))) throw new HttpError(403, 'No access to this file');
+  const obj = c.env.FILES ? await c.env.FILES.get(f.key) : null;
+  if (!obj) throw new HttpError(404, 'The file itself is missing');
+  const inline = INLINE_OK.has(f.mime);
+  return new Response(obj.body, { headers: {
+    'content-type': inline ? f.mime : 'application/octet-stream',
+    'content-disposition': `${inline && c.url.searchParams.get('download') !== '1' ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+    'x-content-type-options': 'nosniff', 'content-security-policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:", 'cache-control': 'private, no-store', 'content-length': String(f.size) } });
+});
+
+// ---------------------------------------------------------------- documents: the company library (norms, policies, instructions, templates)
+const DOC_KINDS = ['norm', 'policy', 'procedure', 'instruction', 'template', 'other'];
+async function docsByIds(c, ids) {
+  ids = (ids || []).map(Number).filter(Number.isInteger);
+  if (!ids.length) return [];
+  return (await all(c.db, `SELECT d.id, d.name, d.kind, d.version, f.id AS file_id, f.name AS file_name, f.size, f.mime FROM documents d
+    LEFT JOIN document_versions v ON v.document_id = d.id AND v.version = d.version LEFT JOIN files f ON f.id = v.file_id
+    WHERE d.status != 'archived' AND d.id IN (${ids.map(() => '?').join(',')}) ORDER BY d.name`, ...ids));
+}
+const docRow = (d, today) => { const due = reviewDueAt(d); return { ...d, reviewDue: due, overdue: !!(due && due < today) }; };
+async function takeFile(c, fileId, tx) {
+  const f = await first(c.db, 'SELECT * FROM files WHERE id = ?', Number(fileId));
+  if (!f || f.uploaded_by !== c.user.id || f.attached_at) throw new HttpError(400, 'Upload the file first');
+  return f;
+}
+route('GET', '/api/documents', async (c) => {
+  const today = now().slice(0, 10);
+  const rows = await all(c.db, `SELECT d.*, p.name AS owner, f.id AS file_id, f.name AS file_name, f.size, f.mime FROM documents d LEFT JOIN persons p ON p.id = d.owner_id
+    LEFT JOIN document_versions v ON v.document_id = d.id AND v.version = d.version LEFT JOIN files f ON f.id = v.file_id
+    WHERE d.status != 'archived' OR ? = 1 ORDER BY d.name`, c.user.is_admin ? 1 : 0);
+  return rows.map(d => docRow(d, today));
+});
+route('GET', '/api/documents/:id', async (c, { id }) => {
+  const d = await first(c.db, 'SELECT d.*, p.name AS owner, a.name AS area FROM documents d LEFT JOIN persons p ON p.id = d.owner_id LEFT JOIN areas a ON a.id = d.area_id WHERE d.id = ?', Number(id));
+  if (!d || (d.status === 'archived' && !c.user.is_admin)) throw new HttpError(404, 'Document not found');
+  const versions = await all(c.db, `SELECT v.version, v.note, v.uploaded_at, p.name AS who, f.id AS file_id, f.name AS file_name, f.size FROM document_versions v LEFT JOIN persons p ON p.id = v.uploaded_by
+    LEFT JOIN files f ON f.id = v.file_id WHERE v.document_id = ? ORDER BY v.version DESC`, d.id);
+  const usedIn = [];
+  for (const fl of await all(c.db, "SELECT id, name, graph FROM flows WHERE status = 'active'")) for (const n of parse(fl.graph, { nodes: [] }).nodes) if ((n.docIds || []).map(Number).includes(d.id)) usedIn.push({ id: fl.id, flow: fl.name, step: n.name });
+  const canManage = !!(c.user.is_admin || (d.owner_id && d.owner_id === c.user.id));
+  return { ...docRow(d, now().slice(0, 10)), versions, usedIn, canManage };
+});
+async function saveDocument(c, id, b) {
+  const old = id ? await first(c.db, 'SELECT * FROM documents WHERE id = ?', id) : null;
+  if (id && !old) throw new HttpError(404, 'Document not found');
+  const name = String(b.name || (old && old.name) || '').trim().slice(0, 160);
+  if (!name) throw new HttpError(400, 'Give the document a name');
+  const kind = DOC_KINDS.includes(b.kind) ? b.kind : (old ? old.kind : 'procedure');
+  const months = b.review_months === undefined ? (old ? old.review_months : 12) : Math.max(0, Math.min(60, Math.floor(Number(b.review_months)) || 0));
+  const area = b.area_id === undefined ? (old ? old.area_id : null) : await areaOf(c, b.area_id);
+  const owner = b.owner_id === undefined ? (old ? old.owner_id : c.user.id) : await personOf(c, b.owner_id);
+  const status = cleanStatus(b.status, old ? old.status : 'active'), desc = String(b.description === undefined ? (old ? old.description : '') : b.description || '').slice(0, 1000);
+  if (old) { await run(c.db, 'UPDATE documents SET name = ?, kind = ?, description = ?, area_id = ?, owner_id = ?, status = ?, review_months = ?, updated_at = ? WHERE id = ?', name, kind, desc, area, owner, status, months, now(), old.id); return { id: old.id }; }
+  const f = await takeFile(c, b.fileId);
+  const did = await run(c.db, 'INSERT INTO documents(name, kind, description, area_id, owner_id, status, version, review_months, reviewed_at, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?,?,?)', name, kind, desc, area, owner, status, months, now(), now(), now());
+  await c.db.batch([c.db.prepare('INSERT INTO document_versions(document_id, version, file_id, note, uploaded_by, uploaded_at) VALUES (?,?,?,?,?,?)').bind(did, 1, f.id, String(b.note || '').slice(0, 300), c.user.id, now()),
+    c.db.prepare('UPDATE files SET attached_at = ? WHERE id = ?').bind(now(), f.id)]);
+  return { id: did };
+}
+route('POST', '/api/admin/documents', async (c) => saveDocument(c, null, await c.body()), { admin: true });
+route('PUT', '/api/admin/documents/:id', async (c, { id }) => saveDocument(c, Number(id), await c.body()), { admin: true });
+route('POST', '/api/documents/:id/versions', async (c, { id }) => {
+  const d = await first(c.db, 'SELECT * FROM documents WHERE id = ?', Number(id));
+  if (!d) throw new HttpError(404, 'Document not found');
+  if (!c.user.is_admin && d.owner_id !== c.user.id) throw new HttpError(403, 'Only the owner or an administrator can upload a new version');
+  const b = await c.body(), f = await takeFile(c, b.fileId), version = d.version + 1;
+  await c.db.batch([c.db.prepare('INSERT INTO document_versions(document_id, version, file_id, note, uploaded_by, uploaded_at) VALUES (?,?,?,?,?,?)').bind(d.id, version, f.id, String(b.note || '').slice(0, 300), c.user.id, now()),
+    c.db.prepare('UPDATE files SET attached_at = ? WHERE id = ?').bind(now(), f.id),
+    c.db.prepare('UPDATE documents SET version = ?, reviewed_at = ?, updated_at = ? WHERE id = ?').bind(version, now(), now(), d.id)]);
+  await logAudit(c, 'new version', 'document', d.id, d.name, 'v' + version + ' · ' + f.name);
+  return { version };
+});
+route('POST', '/api/documents/:id/review', async (c, { id }) => {
+  const d = await first(c.db, 'SELECT id, name, owner_id FROM documents WHERE id = ?', Number(id));
+  if (!d) throw new HttpError(404, 'Document not found');
+  if (!c.user.is_admin && d.owner_id !== c.user.id) throw new HttpError(403, 'Only the owner or an administrator can mark a document as reviewed');
+  await run(c.db, 'UPDATE documents SET reviewed_at = ? WHERE id = ?', now(), d.id);
+  await logAudit(c, 'reviewed', 'document', d.id, d.name);
+  return { ok: true };
+});
+route('DELETE', '/api/admin/documents/:id', async (c, { id }) => {
+  const d = await first(c.db, 'SELECT id, name, status FROM documents WHERE id = ?', Number(id));
+  if (!d) throw new HttpError(404, 'Document not found');
+  if (d.status !== 'archived') throw new HttpError(409, 'Archive the document first: archived items can be deleted for good.');
+  const files = await all(c.db, 'SELECT f.id, f.key FROM document_versions v JOIN files f ON f.id = v.file_id WHERE v.document_id = ?', d.id);
+  for (const f of files) { if (c.env.FILES) await c.env.FILES.delete(f.key); }
+  await c.db.batch([...files.map(f => c.db.prepare('DELETE FROM files WHERE id = ?').bind(f.id)), c.db.prepare('DELETE FROM documents WHERE id = ?').bind(d.id)]);
+  c.note(d.name, files.length + ' file(s) deleted');
+}, { admin: true });
+
+/** Names a flow's formulas use that no earlier step provides: usually a typo (the formula then silently gives nothing). */
+function unknownVariables(g, forms) {
+  const fm = new Map(forms.map(f => [f.id, f]));
+  const known = new Set(['initiator', 'process', 'outcome']), objects = new Set(['initiator']);
+  const addForm = (form) => {
+    if (!form) return;
+    objects.add(form.slug); known.add(form.slug);
+    for (const fd of form.fields) { if (fd.type === 'heading') continue; known.add(fd.key); if (['person', 'record', 'file'].includes(fd.type)) { known.add(fd.key + '_label'); if (fd.type !== 'file') objects.add(fd.key); } }
+  };
+  for (const n of g.nodes) {
+    if (n.formId) addForm(fm.get(Number(n.formId)));
+    for (const a of FB.logic.assignments(n.assignments)) known.add(a.name);
+    if (n.type === 'record' && n.mode !== 'update' && n.formId && fm.get(Number(n.formId))) known.add(fm.get(Number(n.formId)).slug);
+  }
+  const uses = [];
+  const scan = (expr, where) => { if (!expr || !String(expr).trim()) return; let ids; try { ids = FB.expr.identifiers(expr); } catch { return; } for (const id of ids) uses.push({ name: id, where }); };
+  for (const n of g.nodes) {
+    if (n.type === 'start') scan(n.title, 'the process title');
+    for (const a of FB.logic.assignments(n.assignments)) scan(a.expr, '“' + n.name + '”');
+    for (const a of FB.logic.assignments(n.mapping)) scan(a.expr, '“' + n.name + '”');
+    scan(n.recordId, '“' + n.name + '”');
+  }
+  for (const e of g.edges) scan(e.condition, 'an arrow condition' + (e.label ? ' (“' + e.label + '”)' : ''));
+  const out = [], seen = new Set();
+  const dist = (a, b) => { const m = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]); for (let j = 1; j <= b.length; j++) m[0][j] = j; for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return m[a.length][b.length]; };
+  for (const u of uses) {
+    const root = u.name.split('.')[0];
+    if (known.has(u.name) || (u.name.includes('.') && objects.has(root)) || known.has(root) && u.name.includes('.')) continue;
+    if (seen.has(u.name)) continue; seen.add(u.name);
+    const near = [...known].filter(k => dist(k, root) <= 2 && k !== root).sort((a, b) => dist(a, root) - dist(b, root))[0];
+    out.push({ name: u.name, where: u.where, hint: near || '' });
+  }
+  return out;
+}

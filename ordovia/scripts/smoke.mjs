@@ -106,6 +106,55 @@ console.log('request forms, public web form, API');
   r = await put('/api/admin/flows/' + qId, { name: 'Quote', description: '', graph: bad, doc: {}, status: 'active' }); ok(r.data.status === 'draft' && /public web form/.test(r.data.note || ''), 'public form + initiator routing is refused (falls back to draft)', r.data);
 }
 
+console.log('files, documents, formats');
+{
+  const up = async (name, body, type = 'text/plain') => { const r = await fetch(BASE + '/api/files?name=' + encodeURIComponent(name) + '&type=' + encodeURIComponent(type), { method: 'POST', headers: { 'x-ordovia': '1', cookie }, body }); return { status: r.status, data: await r.json() }; };
+  const dl = async (id, ck = cookie) => { const r = await fetch(BASE + '/api/files/' + id, { headers: { cookie: ck } }); return { status: r.status, text: await r.text(), headers: r.headers }; };
+  r = await up('norm.txt', 'THE NORM v1'); ok(r.status === 200 && r.data.size === 11, 'upload a file', r.data); const f1 = r.data.id;
+  r = await up('evil.html', '<script>alert(1)</script>'); ok(r.status === 415, 'web pages and programs are refused', r.data);
+  r = await up('empty.txt', ''); ok(r.status === 400, 'empty files are refused');
+  r = await dl(f1); ok(r.status === 200 && r.text === 'THE NORM v1' && /inline/.test(r.headers.get('content-disposition')) && r.headers.get('x-content-type-options') === 'nosniff', 'download it back, safely', r.headers.get('content-disposition'));
+  r = await post('/api/admin/documents', { name: 'Quality norm', kind: 'norm', area_id: salesId, fileId: f1, review_months: 6 }); ok(r.status === 200 && r.data.id, 'create a document from the upload', r.data); const docId = r.data.id;
+  r = await post('/api/admin/documents', { name: 'Again', fileId: f1 }); ok(r.status === 400, 'a file can only belong to one document');
+  r = await get('/api/documents/' + docId); ok(r.data.version === 1 && r.data.versions.length === 1 && r.data.canManage, 'document with its versions', r.data);
+  r = await up('norm2.txt', 'THE NORM v2'); const f2 = r.data.id;
+  r = await post('/api/documents/' + docId + '/versions', { fileId: f2, note: 'better' }); ok(r.status === 200 && r.data.version === 2, 'upload a new version');
+  r = await get('/api/documents'); ok(r.data.find(d => d.id === docId).file_name === 'norm2.txt', 'the library shows the newest file');
+  r = await dl(f1); ok(r.status === 200 && r.text === 'THE NORM v1', 'the old version stays available');
+  // link to a step
+  { const fl = (await get('/api/admin/flows/' + flowId)).data; fl.graph.nodes.find(n => n.type === 'task').docIds = [docId];
+    r = await put('/api/admin/flows/' + flowId, { name: fl.name, description: fl.description, graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 200, 'link the document to a step');
+    r = await get('/api/handbook/' + flowId); ok(r.data.steps.some(s => (s.documents || []).some(d => d.id === docId)), 'the handbook shows it at the step'); }
+  r = await get('/api/admin/health'); ok(!r.data.items.some(i => /points to a document/.test(i.title)), 'no broken document links');
+  r = await get('/api/search?q=quality'); ok(r.data.results.some(x => x.type === 'Document'), 'search finds documents');
+  r = await del('/api/admin/documents/' + docId); ok(r.status === 409, 'documents are archived before they are deleted');
+  // a file field and formats in a form
+  r = await post('/api/admin/forms', { name: 'Supplier invoice' }); const invId = r.data.id; r = await get('/api/admin/forms/' + invId); const inv = r.data.form;
+  inv.fields = [{ key: 'iban', label: 'IBAN', type: 'text', format: 'iban', required: true }, { key: 'postcode', label: 'Postcode', type: 'text', format: 'postcode_nl' }, { key: 'ref', label: 'Reference', type: 'text', pattern: '^INV-[0-9]{4}$', patternMsg: 'INV-1234' }, { key: 'pdf', label: 'Invoice', type: 'file', required: true }];
+  r = await put('/api/admin/forms/' + invId, { ...inv, access: { direct: true } }); ok(r.status === 200, 'a form with a file field and formats', r.data);
+  r = await up('invoice.pdf', 'PDFDATA', 'application/pdf'); const pf = r.data.id;
+  r = await post('/api/forms/' + invId + '/records', { data: { iban: 'nl91 abna 0417 1643 00', postcode: '1234ab', ref: 'INV-12', pdf: pf } }); ok(r.status === 422 && r.data.errors.ref === 'INV-1234', 'a pattern is enforced on the server', r.data);
+  r = await post('/api/forms/' + invId + '/records', { data: { iban: 'NL00BANK0000000000', pdf: pf } }); ok(r.status === 422 && /IBAN/.test(r.data.errors.iban), 'an invalid IBAN is refused');
+  r = await post('/api/forms/' + invId + '/records', { data: { iban: 'nl91 abna 0417 1643 00', postcode: '1234ab', ref: 'INV-1234', pdf: pf } }); ok(r.status === 200, 'record saved with a file', r.data); const recId = r.data.id;
+  r = await get('/api/records/' + recId); ok(r.data.record.data.iban === 'NL91ABNA0417164300' && r.data.record.data.postcode === '1234 AB' && r.data.record.data.pdf_label === 'invoice.pdf', 'values are written in the standard format', r.data.record.data);
+  r = await post('/api/forms/' + invId + '/records', { data: { iban: 'NL91ABNA0417164300', pdf: pf } }); ok(r.status === 422 && r.data.errors.pdf, 'a file cannot be used twice', r.data);
+  r = await get('/api/forms/' + invId + '/records'); ok(r.data.columns.includes('pdf_label'), 'the SQL view has the file name', r.data.columns);
+  r = await dl(pf); ok(r.status === 200 && r.text === 'PDFDATA' && r.headers.get('content-type') === 'application/pdf', 'the record\'s file opens');
+  // public forms cannot have file fields
+  { const g2 = { nodes: [{ id: 's', type: 'start', name: 'Start', formId: invId, publicEnabled: true }, { id: 'e', type: 'end', name: 'Done' }], edges: [{ id: 'x', from: 's', to: 'e' }] };
+    r = await post('/api/admin/flows', { name: 'Public invoice' }); const pid = r.data.id; r = await put('/api/admin/flows/' + pid, { name: 'Public invoice', description: '', graph: g2, doc: {}, status: 'active' }); ok(r.status === 400 && /File/.test(JSON.stringify(r.data)), 'a public web form cannot have a file field', r.data); }
+  // typos in formulas are reported
+  { const g3 = { nodes: [{ id: 's', type: 'start', name: 'Start' }, { id: 'a', type: 'action', name: 'Calc', assignments: 'total = amout * 2' }, { id: 'e', type: 'end', name: 'Done' }], edges: [{ id: 'x', from: 's', to: 'a' }, { id: 'y', from: 'a', to: 'e' }] };
+    r = await post('/api/admin/flows', { name: 'Typo test' }); const tid = r.data.id; await put('/api/admin/flows/' + tid, { name: 'Typo test', description: '', graph: g3, doc: {}, status: 'draft' });
+    r = await get('/api/admin/health'); ok(r.data.items.some(i => /“amout” is used/.test(i.title)), 'health reports a variable nobody provides', r.data.items.filter(i => i.kind === 'data')); }
+  // someone else cannot read a loose upload
+  r = await up('secret.txt', 'secret'); const sec = r.data.id;
+  const adminCookie = cookie; cookie = ''; r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); const bramCookie = cookie;
+  r = await dl(sec, bramCookie); ok(r.status === 403, 'a loose upload is private to its uploader');
+  r = await dl(f2, bramCookie); ok(r.status === 200, 'but everyone can read documents in the library');
+  cookie = adminCookie;
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');

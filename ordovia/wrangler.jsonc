@@ -22,6 +22,7 @@
     }
   ],
   // Hourly job: marks overdue tasks in the timeline and fires reminder webhooks
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "ordovia-files" }],
   "triggers": { "crons": ["17 * * * *"] },
 
   "env": {
@@ -37,6 +38,7 @@
       "d1_databases": [
         { "binding": "DB", "database_name": "ordovia-demo", "database_id": "2642f888-ce9e-4976-848b-7b811c61d68f", "migrations_dir": "migrations" }
       ],
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "ordovia-demo-files" }],
       "triggers": { "crons": ["30 3 * * *"] }
     }
   }

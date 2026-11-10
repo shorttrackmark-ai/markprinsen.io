@@ -10,6 +10,19 @@
   const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
   const KEY_RE = /^[a-z_][a-z0-9_]*$/;
+  /** Formats: what a value must look like, and its one canonical spelling (so data arrives the same everywhere it goes). */
+  const ibanOk = (s) => {
+    if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(s)) return false;
+    let rem = 0; for (const ch of s.slice(4) + s.slice(0, 4)) rem = (rem * (ch >= 'A' ? 100 : 10) + (ch >= 'A' ? ch.charCodeAt(0) - 55 : +ch)) % 97;
+    return rem === 1;
+  };
+  const FORMATS = {
+    url: { label: 'Web address (https://…)', normalize: (v) => v.trim(), check: (v) => (/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(v) ? '' : 'Use a full web address, starting with http:// or https://.') },
+    phone: { label: 'Phone number', normalize: (v) => v.replace(/[\s().-]+/g, ' ').trim(), check: (v) => (/^\+?[0-9 ]{7,18}$/.test(v) ? '' : 'Use a phone number, e.g. +31 6 12345678.') },
+    iban: { label: 'IBAN', normalize: (v) => v.replace(/\s+/g, '').toUpperCase(), check: (v) => (ibanOk(v) ? '' : 'This is not a valid IBAN.') },
+    postcode_nl: { label: 'Dutch postcode', normalize: (v) => v.replace(/\s+/g, '').toUpperCase().replace(/^(\d{4})([A-Z]{2})$/, '$1 $2'), check: (v) => (/^\d{4} [A-Z]{2}$/.test(v) ? '' : 'Use a Dutch postcode, e.g. 1234 AB.') },
+    code: { label: 'Code (capitals, digits, dashes)', normalize: (v) => v.replace(/\s+/g, '').toUpperCase(), check: (v) => (/^[A-Z0-9][A-Z0-9_-]*$/.test(v) ? '' : 'Use capitals, digits and dashes only.') },
+  };
   const isEmpty = (v) => v == null || v === '' || v === false || (Array.isArray(v) && !v.length);
   const hasVal = (x) => x !== '' && x != null;
 
@@ -19,15 +32,16 @@
     switch (f.type) {
       case 'number': { const n = Number(v); return Number.isFinite(n) ? { value: n } : { value: null, error: 'Not a number.' }; }
       case 'checkbox': return { value: v === true || v === 'true' || v === 1 || v === 'on' };
-      case 'person': case 'record': { const n = Number(v); return Number.isInteger(n) ? { value: n } : { value: null, error: 'Invalid choice.' }; }
+      case 'person': case 'record': case 'file': { const n = Number(v); return Number.isInteger(n) ? { value: n } : { value: null, error: 'Invalid choice.' }; }
       case 'date': return DATE_RE.test(String(v)) ? { value: String(v) } : { value: null, error: 'Use a valid date.' };
       case 'select': case 'radio': return (f.options || []).includes(String(v)) ? { value: String(v) } : { value: null, error: 'Not one of the options.' };
-      default: return { value: String(v).slice(0, 20000) };
+      default: { const t = String(v).slice(0, 20000); return { value: f.type === 'text' && FORMATS[f.format] ? FORMATS[f.format].normalize(t) : t }; }
     }
   }
 
   const Logic = {
     KEY_RE,
+    FORMATS,
     /**
      * Compute calculations and visibility.
      * input: raw values by key · context: process variables · linked: {"supplier.country": "NL", ...}
@@ -54,7 +68,10 @@
         else if (f.type === 'number' && v != null) {
           if (hasVal(f.min) && v < Number(f.min)) msg = `Minimum is ${f.min}.`;
           else if (hasVal(f.max) && v > Number(f.max)) msg = `Maximum is ${f.max}.`;
+          else if (f.integer && !Number.isInteger(v)) msg = 'Whole numbers only.';
         } else if (f.type === 'email' && v && !EMAIL_RE.test(v)) msg = 'Not a valid e-mail address.';
+        else if (f.type === 'text' && v && FORMATS[f.format]) msg = FORMATS[f.format].check(String(v));
+        else if (f.type === 'text' && v && f.pattern) { try { if (!new RegExp(f.pattern).test(String(v))) msg = f.patternMsg || 'Does not have the required format.'; } catch (e) { /* a broken pattern is reported when the form is saved */ } }
         if (!msg && f.validate && !isEmpty(v) && !FB.expr.truthy(FB.expr.safe(f.validate, ctx, true))) msg = f.validateMsg || 'Value is not valid.';
         if (msg) errors[f.key] = msg;
       }
@@ -78,7 +95,7 @@
         const c = coerce(f, input ? input[f.key] : undefined);
         raw[f.key] = c.value;
         if (c.error) errors[f.key] = c.error;
-        if ((f.type === 'person' || f.type === 'record') && c.value != null) {
+        if ((f.type === 'person' || f.type === 'record' || f.type === 'file') && c.value != null) {
           const hit = lookup(f, c.value);
           if (!hit) { errors[f.key] = 'Invalid choice.'; raw[f.key] = null; continue; }
           raw[f.key + '_label'] = hit.label;
@@ -92,7 +109,7 @@
       for (const f of fields) {
         if (f.type === 'heading') continue;
         data[f.key] = visible[f.key] ? (values[f.key] ?? null) : null;
-        if (f.type === 'person' || f.type === 'record') data[f.key + '_label'] = visible[f.key] ? (values[f.key + '_label'] ?? null) : null;
+        if (f.type === 'person' || f.type === 'record' || f.type === 'file') data[f.key + '_label'] = visible[f.key] ? (values[f.key + '_label'] ?? null) : null;
       }
       return { data, linked, errors, formErrors, ok: !Object.keys(errors).length && !formErrors.length };
     },
@@ -109,6 +126,10 @@
           if (err) problems.push(`${f.label || f.key} – ${prop}: ${err}`);
         }
         if (f.type === 'record' && !f.recordForm) problems.push(`${f.label || f.key}: choose the linked form.`);
+        if (f.type === 'text' && f.pattern) {
+          try { new RegExp(f.pattern); } catch (e) { problems.push(`${f.label || f.key}: the pattern is not a valid regular expression.`); }
+          if (String(f.pattern).length > 200) problems.push(`${f.label || f.key}: the pattern is too long.`);
+        }
       }
       for (const c of form.checks || []) { const err = c.rule ? FB.expr.check(c.rule) : null; if (err) problems.push(`Check “${c.message || c.rule}”: ${err}`); }
       return problems;
@@ -165,7 +186,7 @@
         if (n.type === 'start' && n.publicEnabled) {
           if (!n.formId) errs.push('A public web form needs a request form: choose one at Start.');
           const pf = forms && n.formId ? forms.find(f => Number(f.id) === Number(n.formId)) : null;
-          if (pf && pf.fields.some(f => f.type === 'person' || f.type === 'record')) errs.push('A public web form cannot use Person or Record fields (visitors are not signed in).');
+          if (pf && pf.fields.some(f => f.type === 'person' || f.type === 'record' || f.type === 'file')) errs.push('A public web form cannot use Person, Record or File fields (visitors are not signed in).');
           for (const t of g.nodes) {
             const a = t.type === 'task' ? (t.assignee || { type: 'initiator' }) : null;
             if (a && (a.type === 'initiator' || (a.type === 'tags' && (a.sameAs || []).length))) errs.push(`Task “${t.name}” depends on who started the process, but a public web form has no signed-in person: route it to a person or to tags.`);
