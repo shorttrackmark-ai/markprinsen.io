@@ -400,7 +400,8 @@
       <form class="card narrow" id="sf"><h3>Workspace</h3>
         <label>Company name<input name="company" value="${esc(s.company || '')}"></label>
         <label>Brand colour<span class="color-row"><input type="color" name="color" value="${esc(s.color || '#4f46e5')}"><button type="button" class="btn small ghost" id="resetColor">Default</button></span></label>
-        <label>Notification webhook <small class="muted">(https – e.g. a Teams or Slack incoming webhook; receives new and overdue tasks)</small><input name="notify_webhook" class="mono" value="${esc(s.notify_webhook || '')}" placeholder="https://…"></label>
+        <label>Notification webhook <small class="muted">(https – new and overdue tasks are posted here)</small><input name="notify_webhook" class="mono" value="${esc(s.notify_webhook || '')}" placeholder="https://…"></label>
+        <label>Message format<select name="notify_format"><option value="json" ${s.notify_format !== 'teams' ? 'selected' : ''}>Plain JSON (Slack, Power Automate, Zapier, your own system)</option><option value="teams" ${s.notify_format === 'teams' ? 'selected' : ''}>Microsoft Teams card (Workflows “When a Teams webhook request is received”)</option></select></label>
         <div class="form-actions left"><button class="btn primary">Save</button></div></form>
       <div class="card narrow"><h3>Your data</h3><p class="muted">Everything is stored in your own Cloudflare D1 (SQLite) database. Download a full JSON export at any time.</p>
         <a class="btn" href="/api/admin/export">Download export</a></div></div>`;
@@ -411,7 +412,7 @@
     f.onsubmit = async (e) => {
       e.preventDefault();
       try {
-        await api.put('/admin/settings', { company: f.company.value, color, notify_webhook: f.notify_webhook.value.trim() });
+        await api.put('/admin/settings', { company: f.company.value, color, notify_webhook: f.notify_webhook.value.trim(), notify_format: f.notify_format.value });
         FB.state.settings.company = f.company.value; FB.state.settings.color = color; FB.applyBranding(); FB.shell('/admin/settings'); toast('Settings saved', 'ok');
       } catch (err) { toast(err.message, 'error'); }
     };

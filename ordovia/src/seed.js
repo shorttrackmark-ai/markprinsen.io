@@ -308,22 +308,22 @@ export async function seedDemo(db, admin, bucket) {
   ]) });
   // ---- the document library: norms, policies and work instructions, linked to the steps where they matter ----
   const LIB = [
-    { name: 'Leave policy', kind: 'policy', area: 'hr', owner: 'admin', file: 'leave-policy.txt', link: ['Leave request', 'Manager approval'],
+    { name: 'Leave policy', kind: 'policy', area: 'hr', folder: 'Policies', owner: 'admin', file: 'leave-policy.txt', link: ['Leave request', 'Manager approval', 'Section 3: approval'],
       text: 'LEAVE POLICY\n\n1. Every employee has 25 days of leave a year.\n2. Up to 3 working days: register the request, no approval needed.\n3. More than 3 working days: approval by your own manager, at least two weeks in advance.\n4. Sickness is reported to your manager on the first day, by phone.\n5. A request is answered within 2 working days.\n' },
-    { name: 'Purchasing norm: approval limits', kind: 'norm', area: 'fin', owner: 'eva', file: 'purchasing-norm.txt', link: ['Purchase request', 'Finance approval'],
+    { name: 'Purchasing norm: approval limits', kind: 'norm', area: 'fin', folder: 'Norms', owner: 'eva', file: 'purchasing-norm.txt', link: ['Purchase request', 'Finance approval', 'Approval limits'],
       text: 'PURCHASING NORM\n\nApproval limits per purchase:\n- up to EUR 250: no approval\n- EUR 250 to 1,000: budget holder\n- above EUR 1,000: budget holder and Finance\n\nOnly buy from approved suppliers (see register Supplier). Keep the quote with the request.\nInvoices are paid within the supplier payment term.\n' },
-    { name: 'Incident handling: work instruction', kind: 'instruction', area: 'ops', owner: 'daan', file: 'incident-instruction.txt', link: ['Incident & corrective action', 'Root cause & action'],
+    { name: 'Incident handling: work instruction', kind: 'instruction', area: 'ops', folder: 'Quality / Work instructions', owner: 'daan', file: 'incident-instruction.txt', link: ['Incident & corrective action', 'Root cause & action', 'Step 3: 5x why'],
       text: 'WORK INSTRUCTION: INCIDENTS\n\n1. Make the situation safe first.\n2. Report the incident in Ordovia the same day: what, where, risk (low, medium, high).\n3. Medium and high risks get a root-cause analysis within 5 days (5x why).\n4. Agree a corrective action, an owner and a date; check the effect after 30 days.\n' },
-    { name: 'ISO 9001 quality manual (summary)', kind: 'norm', area: 'ops', owner: 'daan', file: 'iso9001-summary.txt', link: [],
+    { name: 'ISO 9001 quality manual (summary)', kind: 'norm', area: 'ops', folder: 'Quality / ISO 9001', owner: 'daan', file: 'iso9001-summary.txt', link: [],
       text: 'ISO 9001 – SUMMARY FOR OUR TEAMS\n\nWe keep documented information, control changes, review processes at least yearly, handle non-conformities with corrective action and measure customer satisfaction.\n' },
   ];
   for (const d of LIB) {
     const did = id('documents'), fid = id('files'), key = 'seed/' + slugify(d.name);
     if (bucket) await bucket.put(key, d.text, { httpMetadata: { contentType: 'text/plain' } });
     M.files.push({ id: fid, key, name: d.file, mime: 'text/plain', size: d.text.length, uploaded_by: P[d.owner], created_at: at(), attached_at: at() });
-    M.documents.push({ id: did, name: d.name, kind: d.kind, description: '', area_id: A[d.area], owner_id: P[d.owner], status: 'active', version: 1, review_months: 12, reviewed_at: at(), created_at: at(), updated_at: at() });
+    M.documents.push({ id: did, name: d.name, kind: d.kind, description: '', area_id: A[d.area], folder: d.folder || null, owner_id: P[d.owner], status: 'active', version: 1, review_months: 12, reviewed_at: at(), created_at: at(), updated_at: at() });
     M.document_versions.push({ id: id('document_versions'), document_id: did, version: 1, file_id: fid, note: 'First version', uploaded_by: P[d.owner], uploaded_at: at() });
-    if (d.link.length) { const fl = M.flows.find(x => x.name === d.link[0]); const g = typeof fl.graph === 'string' ? JSON.parse(fl.graph) : fl.graph; const nd = g.nodes.find(n => n.name === d.link[1]); if (nd) { nd.docIds = (nd.docIds || []).concat(did); fl.graph = g; } }
+    if (d.link.length) { const fl = M.flows.find(x => x.name === d.link[0]); const g = typeof fl.graph === 'string' ? JSON.parse(fl.graph) : fl.graph; const nd = g.nodes.find(n => n.name === d.link[1]); if (nd) { nd.docIds = (nd.docIds || []).concat(did); if (d.link[2]) nd.docSections = { ...(nd.docSections || {}), [did]: d.link[2] }; fl.graph = g; } }
   }
 
   M.settings.push({ key: 'demo', value: '1' });
@@ -350,7 +350,7 @@ export async function seedDemo(db, admin, bucket) {
     events: ['id', 'instance_id', 'person_id', 'message', 'created_at'],
     flow_versions: ['id', 'flow_id', 'version', 'name', 'graph', 'doc', 'saved_at', 'saved_by'],
     files: ['id', 'key', 'name', 'mime', 'size', 'uploaded_by', 'created_at', 'attached_at'],
-    documents: ['id', 'name', 'kind', 'description', 'area_id', 'owner_id', 'status', 'version', 'review_months', 'reviewed_at', 'created_at', 'updated_at'],
+    documents: ['id', 'name', 'kind', 'description', 'area_id', 'folder', 'owner_id', 'status', 'version', 'review_months', 'reviewed_at', 'created_at', 'updated_at'],
     document_versions: ['id', 'document_id', 'version', 'file_id', 'note', 'uploaded_by', 'uploaded_at'],
     dashboards: ['id', 'name', 'widgets', 'access', 'area_id', 'status', 'owner_id', 'updated_at'],
   };

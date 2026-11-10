@@ -226,6 +226,16 @@ curl "${origin}/api/v1/runs?reference=MY-ORDER-1" -H "Authorization: Bearer ord_
 curl ${origin}/api/v1/forms -H "Authorization: Bearer ord_…"
 curl ${origin}/api/v1/forms/supplier/records -H "Authorization: Bearer ord_…"`)}</pre>
       <p class="small"><b>Callbacks.</b> With <code>callbackUrl</code> (https) Ordovia posts <code>{"event":"run.finished"|"run.stuck","run":{…},"outputs":{…}}</code> when the run ends. <b>Outgoing:</b> a Webhook step in a flow calls any system during a process.</p></div>
+      <h2>Microsoft: Power Automate, Power Apps, Logic Apps, Teams</h2><div class="card">
+        <p><b>Use Ordovia as a connector.</b> Ordovia describes its API in a standard file, so Microsoft tools get ready-made actions: <i>Start a process</i>, <i>Get a run</i>, <i>List runs</i>, <i>Add a record</i>.</p>
+        <ol class="small steps-list">
+          <li>Create an API token above (for a person made for this purpose, such as “Power Automate”).</li>
+          <li>In Power Automate choose <i>Data › Custom connectors › New custom connector › Import an OpenAPI file</i> and use <input readonly class="mono link-input inline-link" value="${esc(origin + '/api/v1/openapi.json')}"> (download it from that address and upload it).</li>
+          <li>Security: choose <i>API Key</i>, parameter label <code>Authorization</code>, location <i>Header</i>. When you create a connection, type <code>Bearer ord_…</code> (the word Bearer, a space, the token).</li>
+          <li>Build flows: <i>when an e-mail arrives in Outlook → Start a process</i>, or <i>when a SharePoint item is created → Start a process</i>.</li>
+          <li>To have Power Automate hear back when a run finishes, start the flow with <i>When an HTTP request is received</i>, and pass its address as <code>callbackUrl</code>.</li>
+        </ol>
+        <p><b>Teams.</b> In Teams make a workflow “Post to a channel when a webhook request is received”, copy its address into <i>Settings › Notification webhook</i> and choose the format <i>Microsoft Teams card</i>. Every new and overdue task is then announced in the channel.</p></div>
       <h2>Processes you can call <span class="count">${procs.length}</span></h2>
       ${procs.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Process</th><th>Area</th><th>Input (request form)</th><th>Start</th></tr></thead><tbody>${procs.map(p => `<tr><td><b>${esc(p.name)}</b></td><td>${esc(p.area || '–')}</td><td class="small">${p.input ? p.input.fields.map(f => `<code>${esc(f.key)}</code>${f.required ? '*' : ''} <span class="muted">${esc(f.type)}</span>`).join(' · ') : '<span class="muted">none – starts without input</span>'}</td><td><code>POST /api/v1/processes/${p.id}/start</code></td></tr>`).join('')}</tbody></table></div><p class="small muted">* required</p>` : '<p class="muted">No active processes yet.</p>'}
       <h2>Public web forms <span class="count">${pubs.length}</span></h2>

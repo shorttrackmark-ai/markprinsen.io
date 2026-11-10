@@ -309,7 +309,7 @@
         ${n.type === 'decision' ? '<p class="hint">Select the arrows leaving this decision to set their conditions.</p>' : ''}
         ${n.type === 'end' ? '<p class="hint">The name of this End becomes the <code>outcome</code> of the process.</p>' : ''}
         ${['task', 'decision', 'action', 'record', 'webhook'].includes(n.type) ? `<label>Instructions / work instruction <small class="muted">(shown in the task and the handbook)</small><textarea data-n="instructions" rows="4">${esc(n.instructions || '')}</textarea></label>` : ''}
-        ${['task', 'decision', 'action', 'record', 'webhook'].includes(n.type) ? `<label>Documents at this step <small class="muted">(norms, policies, templates: shown with the task and in the handbook)</small>${multiSelect('data-docs', (meta.documents || []).map(d => ({ value: d.id, label: d.name + ' (' + d.kind + ')' })), n.docIds, 5)}</label>` : ''}
+        ${['task', 'decision', 'action', 'record', 'webhook'].includes(n.type) ? `<label>Documents at this step <small class="muted">(norms, policies, templates: shown with the task and in the handbook)</small>${multiSelect('data-docs', (meta.documents || []).map(d => ({ value: d.id, label: d.name + ' (' + d.kind + ')' })), n.docIds, 5)}</label><div id="docSecs"></div>` : ''}
         ${n.type !== 'start' ? '<button class="btn danger small" id="delSel">Delete step</button>' : '<p class="hint">Click the background to edit who can start this process and its title.</p>'}
         <div class="err" id="nErr"></div>${varsHint()}`;
       $$('[data-n]', box).forEach(inp => inp.addEventListener(inp.tagName === 'SELECT' ? 'change' : 'input', () => {
@@ -319,7 +319,14 @@
         touch(); draw();
         if (p === 'mode' || (p === 'formId' && n.type === 'record')) drawProps();
       }));
-      const dd = $('[data-docs]', box); if (dd) dd.onchange = () => { n.docIds = [...dd.selectedOptions].map(o => Number(o.value)); if (!n.docIds.length) delete n.docIds; touch(); };
+      // which chapter / page of each linked document matters at this step
+      const drawSecs = () => {
+        const host = $('#docSecs', box); if (!host) return;
+        host.innerHTML = (n.docIds || []).map(id => { const d = (meta.documents || []).find(x => x.id === Number(id)); return d ? `<label class="doc-sec">${esc(d.name)} › <input data-sec="${d.id}" maxlength="80" value="${esc((n.docSections || {})[d.id] || '')}" placeholder="chapter or page, e.g. 4.2 Cleaning"></label>` : ''; }).join('');
+        $$('[data-sec]', host).forEach(i => i.oninput = () => { n.docSections = n.docSections || {}; if (i.value.trim()) n.docSections[i.dataset.sec] = i.value; else delete n.docSections[i.dataset.sec]; if (!Object.keys(n.docSections).length) delete n.docSections; touch(); });
+      };
+      drawSecs();
+      const dd = $('[data-docs]', box); if (dd) dd.onchange = () => { n.docIds = [...dd.selectedOptions].map(o => Number(o.value)); if (!n.docIds.length) delete n.docIds; if (n.docSections) { for (const k of Object.keys(n.docSections)) if (!(n.docIds || []).includes(Number(k))) delete n.docSections[k]; if (!Object.keys(n.docSections).length) delete n.docSections; } touch(); drawSecs(); };
       const at = $('#aType', box);
       if (at) at.onchange = () => { n.assignee = { type: at.value }; if (at.value === 'person' && meta.people[0]) n.assignee.personId = meta.people[0].id; touch(); draw(); drawProps(); };
       const upd = () => {

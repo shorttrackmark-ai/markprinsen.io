@@ -38,3 +38,10 @@ Integration: *API tokens* (act as a chosen person), *public web forms* (a servic
 - **File fields** in forms: the file is stored with the record and opens from the data view and the "earlier in this process" panel. Not available in public web forms.
 - **Formats**: a text field can be an IBAN, Dutch postcode, phone number, web address or code, or follow your own pattern; values are checked on the server and written in one standard spelling. Number fields can require whole numbers.
 - Health also warns when a formula uses a name that no earlier step provides (typo detector with "did you mean").
+
+## Folders, chapters and Microsoft (built)
+- Documents have an optional `folder` (text path, two levels: "Quality / ISO 9001"). A folder filter sits on the library page.
+- A step links a document *and* the part that matters: `node.docSections = {docId: "Chapter 4.2"}`; shown at the task, in the handbook and on the document page.
+- `GET /api/v1/openapi.json` (public, Swagger 2.0) imports as a Power Automate / Logic Apps custom connector. The API page explains the steps.
+- Notification webhook format `teams` posts an Adaptive Card for a Teams workflow webhook (setting `notify_format`).
+- Not built yet: AI steps (extract, classify, draft) and Microsoft sign-in.

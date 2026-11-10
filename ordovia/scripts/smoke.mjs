@@ -114,17 +114,20 @@ console.log('files, documents, formats');
   r = await up('evil.html', '<script>alert(1)</script>'); ok(r.status === 415, 'web pages and programs are refused', r.data);
   r = await up('empty.txt', ''); ok(r.status === 400, 'empty files are refused');
   r = await dl(f1); ok(r.status === 200 && r.text === 'THE NORM v1' && /inline/.test(r.headers.get('content-disposition')) && r.headers.get('x-content-type-options') === 'nosniff', 'download it back, safely', r.headers.get('content-disposition'));
-  r = await post('/api/admin/documents', { name: 'Quality norm', kind: 'norm', area_id: salesId, fileId: f1, review_months: 6 }); ok(r.status === 200 && r.data.id, 'create a document from the upload', r.data); const docId = r.data.id;
+  r = await post('/api/admin/documents', { name: 'Quality norm', kind: 'norm', area_id: salesId, fileId: f1, review_months: 6, folder: ' Quality /  ISO 9001 / extra / deeper ' }); ok(r.status === 200 && r.data.id, 'create a document from the upload', r.data); const docId = r.data.id;
   r = await post('/api/admin/documents', { name: 'Again', fileId: f1 }); ok(r.status === 400, 'a file can only belong to one document');
-  r = await get('/api/documents/' + docId); ok(r.data.version === 1 && r.data.versions.length === 1 && r.data.canManage, 'document with its versions', r.data);
+  r = await get('/api/documents/' + docId); ok(r.data.folder === 'Quality / ISO 9001', 'folders are cleaned to two levels', r.data.folder);
+  ok(r.data.version === 1 && r.data.versions.length === 1 && r.data.canManage, 'document with its versions', r.data);
   r = await up('norm2.txt', 'THE NORM v2'); const f2 = r.data.id;
   r = await post('/api/documents/' + docId + '/versions', { fileId: f2, note: 'better' }); ok(r.status === 200 && r.data.version === 2, 'upload a new version');
   r = await get('/api/documents'); ok(r.data.find(d => d.id === docId).file_name === 'norm2.txt', 'the library shows the newest file');
   r = await dl(f1); ok(r.status === 200 && r.text === 'THE NORM v1', 'the old version stays available');
   // link to a step
-  { const fl = (await get('/api/admin/flows/' + flowId)).data; fl.graph.nodes.find(n => n.type === 'task').docIds = [docId];
+  { const fl = (await get('/api/admin/flows/' + flowId)).data; { const tn = fl.graph.nodes.find(n => n.type === 'task'); tn.docIds = [docId]; tn.docSections = { [docId]: 'Chapter 4.2' }; }
     r = await put('/api/admin/flows/' + flowId, { name: fl.name, description: fl.description, graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 200, 'link the document to a step');
-    r = await get('/api/handbook/' + flowId); ok(r.data.steps.some(s => (s.documents || []).some(d => d.id === docId)), 'the handbook shows it at the step'); }
+    r = await get('/api/handbook/' + flowId); ok(r.data.steps.some(s => (s.documents || []).some(d => d.id === docId && d.section === 'Chapter 4.2')), 'the handbook shows it at the step, with the chapter'); }
+  r = await get('/api/documents/' + docId); ok(r.data.usedIn.some(u => u.section === 'Chapter 4.2'), 'the document lists where it is used, with the chapter');
+  r = await put('/api/admin/documents/' + docId, { folder: '' }); r = await get('/api/documents'); ok(!r.data.find(d => d.id === docId).folder, 'a folder can be cleared'); await put('/api/admin/documents/' + docId, { folder: 'Quality' });
   r = await get('/api/admin/health'); ok(!r.data.items.some(i => /points to a document/.test(i.title)), 'no broken document links');
   r = await get('/api/search?q=quality'); ok(r.data.results.some(x => x.type === 'Document'), 'search finds documents');
   r = await del('/api/admin/documents/' + docId); ok(r.status === 409, 'documents are archived before they are deleted');
@@ -155,6 +158,13 @@ console.log('files, documents, formats');
   cookie = adminCookie;
 }
 
+console.log('notification format');
+{
+  r = await put('/api/admin/settings', { notify_format: 'word' }); ok(r.status === 400, 'only known notification formats');
+  r = await put('/api/admin/settings', { notify_format: 'teams' }); ok(r.status === 200, 'choose the Teams card format'); r = await get('/api/admin/settings'); ok(r.data.notify_format === 'teams', 'the choice is kept');
+  await put('/api/admin/settings', { notify_format: 'json' });
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');
@@ -162,6 +172,11 @@ r = await get('/api/admin/health'); ok(r.status === 403, 'health is for admins')
 r = await get('/api/admin/audit'); ok(r.status === 403, 'audit is for admins');
 r = await get('/api/handbook'); ok(r.data.every(f => f.status === 'active'), 'handbook shows only active processes');
 r = await get('/api/search?q=leave'); ok(r.status === 200 && r.data.results.length > 0, 'colleague can search');
+
+console.log('Microsoft & AI couplings');
+{
+  r = await fetch(BASE + '/api/v1/openapi.json'); const sw = await r.json(); ok(r.status === 200 && sw.swagger === '2.0' && sw.paths['/processes/{id}/start'].post.operationId === 'StartProcess' && sw.securityDefinitions.token.name === 'Authorization', 'the API is described as a Swagger file, without signing in');
+}
 
 console.log(failed ? `\n${failed} of ${n} checks FAILED` : `\nall ${n} checks passed`);
 process.exit(failed ? 1 : 0);

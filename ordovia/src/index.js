@@ -101,10 +101,19 @@ export default {
       tx.add('INSERT INTO events(instance_id, message, created_at) VALUES (?,?,?)', t.instance_id, `Task “${t.name}” is overdue`, now());
     }
     await tx.commit();
-    const hook = await first(db, "SELECT value FROM settings WHERE key = 'notify_webhook'");
-    if (hook && hook.value) exec.waitUntil(Promise.all(due.map(t => postJSON(hook.value, { event: 'task.overdue', text: `Overdue: ${t.name} – ${t.title}`, task: t }))));
+    const hook = await first(db, "SELECT value FROM settings WHERE key = 'notify_webhook'"), fmt = await first(db, "SELECT value FROM settings WHERE key = 'notify_format'");
+    if (hook && hook.value) exec.waitUntil(Promise.all(due.map(t => postJSON(hook.value, notifyBody(fmt && fmt.value, { event: 'task.overdue', text: `Overdue: ${t.name} – ${t.title}`, task: t })))));
   },
 };
+
+/** The notification webhook speaks plain JSON, or the message card that a Microsoft Teams workflow ("When a Teams webhook request is received") posts to a channel. */
+function notifyBody(format, p) {
+  if (format !== 'teams') return p;
+  return { type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', contentUrl: null, content: {
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', type: 'AdaptiveCard', version: '1.4',
+    body: [{ type: 'TextBlock', text: String(p.text || p.event || 'Ordovia'), wrap: true, weight: 'Bolder' }],
+    ...(p.link ? { actions: [{ type: 'Action.OpenUrl', title: 'Open Ordovia', url: p.link }] } : {}) } }] };
+}
 
 async function postJSON(url, payload) {
   if (DEMO) return;   // (the example sends nothing anywhere)
@@ -275,7 +284,7 @@ async function startRun(c, flow, opts) {
 async function runtimeIO(c, tx, proc) {
   const D = await c.dir();
   const forms = await c.formsMap();
-  const hook = (await c.settings()).notify_webhook;
+  const st = await c.settings(), hook = st.notify_webhook, hookFormat = st.notify_format;
   const origin = c.url.origin;
   return {
     now, forms, describe: (r) => D.describe(r),
@@ -283,7 +292,7 @@ async function runtimeIO(c, tx, proc) {
     createTask: (t) => {
       tx.add('INSERT INTO tasks(instance_id, node_id, name, form_id, assignee, status, due_at, created_at) VALUES (?,?,?,?,?,?,?,?)',
         proc.id, t.nodeId, t.name, t.formId, JSON.stringify(t.assignee), 'open', t.dueAt, now());
-      if (hook) tx.after.push({ url: hook, payload: { event: 'task.created', text: `New task: ${t.name} – ${proc.title} (for ${D.describe(t.assignee)})`, link: origin + '/#/', task: t.name, process: proc.title } });
+      if (hook) tx.after.push({ url: hook, payload: notifyBody(hookFormat, { event: 'task.created', text: `New task: ${t.name} – ${proc.title} (for ${D.describe(t.assignee)})`, link: origin + '/#/', task: t.name, process: proc.title }) });
     },
     createRecord: (form, data) => tx.add('INSERT INTO submissions(form_id, person_id, instance_id, data, created_at) VALUES (?,?,?,?,?)', form.id, null, proc.id, JSON.stringify(data), now()),
     updateRecord: (form, rid, patch) => tx.add('UPDATE submissions SET data = json_patch(data, ?), updated_at = ? WHERE id = ? AND form_id = ?', JSON.stringify(patch), now(), rid, form.id),
@@ -345,7 +354,7 @@ route('GET', '/api/tasks/:id', async (c, { id }) => {
   return {
     task: { id: t.id, name: t.name, status: t.status, form_id: t.form_id, created_at: t.created_at, due_at: t.due_at, completed_at: t.completed_at, instance_id: t.iid, process: t.process },
     instructions: node.instructions || '',
-    documents: await docsByIds(c, node.docIds),
+    documents: await docsByIds(c, node.docIds, node.docSections || {}),
     assignee: D.describe(parse(t.assignee, {})),
     canComplete: t.status === 'open' && D.matches(c.user.id, parse(t.assignee, {}), inst),
     vars: parse(t.vars, {}),
@@ -489,12 +498,12 @@ route('GET', '/api/handbook/:id', async (c, { id }) => {
     id: n.id, type: n.type, name: n.name, instructions: n.instructions || '',
     responsible: n.type === 'task' ? D.describe(n.assignee || { type: 'initiator' }) : '',
     form: n.formId && forms.get(Number(n.formId)) ? forms.get(Number(n.formId)).name : '',
-    dueHours: n.dueHours || null, docIds: n.docIds || [],
+    dueHours: n.dueHours || null, docIds: n.docIds || [], docSections: n.docSections || {},
     next: graph.edges.filter(e => e.from === n.id).map(e => ({ to: (graph.nodes.find(x => x.id === e.to) || {}).name, when: e.label || e.condition || '' })),
   }));
   const due = reviewDueAt(f);
   const docMap = new Map((await docsByIds(c, [...new Set(steps.flatMap(x => x.docIds))])).map(d => [d.id, d]));
-  steps.forEach(x => { x.documents = x.docIds.map(i => docMap.get(i)).filter(Boolean); });
+  steps.forEach(x => { x.documents = x.docIds.map(i => docMap.get(i) && { ...docMap.get(i), section: String(x.docSections[i] || '') }).filter(Boolean); });
   return { id: f.id, name: f.name, description: f.description, doc: parse(f.doc, {}), version: f.version, updated_at: f.updated_at, graph, steps, stats,
     status: f.status, area_id: f.area_id, area: f.area_name || '', owner_id: f.owner_id, owner: f.owner_name || '', reviewMonths: f.review_months, reviewedAt: f.reviewed_at, reviewDue: due, overdue: !!(due && due < now().slice(0, 10)),
     canReview: !!(c.user.is_admin || (f.owner_id && f.owner_id === c.user.id)) };
@@ -747,6 +756,7 @@ route('PUT', '/api/admin/settings', async (c) => {
   if (b.color != null) { if (b.color && !/^#[0-9a-f]{6}$/i.test(b.color)) throw new HttpError(400, 'Colour must look like #4f46e5'); set('color', b.color); }
   if (DEMO && b.notify_webhook) throw new HttpError(403, 'Webhooks are switched off in the example.');
   if (b.notify_webhook != null) { if (b.notify_webhook && !/^https:\/\//.test(b.notify_webhook)) throw new HttpError(400, 'Webhook must start with https://'); set('notify_webhook', b.notify_webhook); }
+  if (b.notify_format != null) { if (!['json', 'teams'].includes(b.notify_format)) throw new HttpError(400, 'Format must be json or teams'); set('notify_format', b.notify_format); }
   if (st.length) await c.db.batch(st);
 }, { admin: true });
 route('GET', '/api/admin/export', async (c) => {
@@ -1020,6 +1030,42 @@ route('POST', '/api/v1/forms/:slug/records', async (c, { slug }) => {
 });
 route('GET', '/api/v1/ping', async (c) => ({ ok: true, as: c.user.name }));
 
+/** The API described as a Swagger 2.0 file: import it in Power Automate / Power Apps / Logic Apps (custom connector) and every call below becomes an action. Public: it holds no data. */
+route('GET', '/api/v1/openapi.json', async (c) => {
+  const par = (name, where, type, summary, required) => ({ name, in: where, type, required: !!required, 'x-ms-summary': summary });
+  const obj = { type: 'object', additionalProperties: true };
+  const spec = {
+    swagger: '2.0',
+    info: { title: 'Ordovia', version: '1.0', description: 'Start and follow business processes, and read or add records in forms. Every call acts as the person the API token belongs to.' },
+    host: c.url.host, basePath: '/api/v1', schemes: ['https'], consumes: ['application/json'], produces: ['application/json'],
+    securityDefinitions: { token: { type: 'apiKey', in: 'header', name: 'Authorization', description: 'Type: Bearer ord_… (the word Bearer, a space, then your token from Control › API & web forms).' } },
+    security: [{ token: [] }],
+    definitions: {
+      Run: { type: 'object', properties: { id: { type: 'integer', 'x-ms-summary': 'Run id' }, process: { type: 'string', 'x-ms-summary': 'Process' }, title: { type: 'string', 'x-ms-summary': 'Title' }, status: { type: 'string', 'x-ms-summary': 'Status', description: 'running, done, stuck or cancelled' }, outcome: { type: 'string', 'x-ms-summary': 'Outcome' }, reference: { type: 'string', 'x-ms-summary': 'Your reference' }, outputs: { ...obj, 'x-ms-summary': 'Outputs' }, url: { type: 'string', 'x-ms-summary': 'Link' }, created_at: { type: 'string' }, finished_at: { type: 'string' } } },
+      RunResponse: { type: 'object', properties: { run: { $ref: '#/definitions/Run' } } },
+      StartRequest: { type: 'object', properties: { data: { ...obj, 'x-ms-summary': 'Request data', description: 'The fields of the request form: { "field_key": value }. See List processes.' }, reference: { type: 'string', 'x-ms-summary': 'Your reference', description: 'Your own number, e.g. an order number; find the run again with it.' }, callbackUrl: { type: 'string', 'x-ms-summary': 'Callback URL', description: 'https address that gets a message when the run finishes. In Power Automate: the URL of a "When an HTTP request is received" trigger.' } } },
+      Process: { type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' }, description: { type: 'string' }, area: { type: 'string' }, input: obj } },
+    },
+    paths: {
+      '/ping': { get: { operationId: 'Ping', summary: 'Check the connection', description: 'Returns the person this token acts as.', responses: { 200: { description: 'OK', schema: { type: 'object', properties: { ok: { type: 'boolean' }, as: { type: 'string', 'x-ms-summary': 'Acts as' } } } } } } },
+      '/processes': { get: { operationId: 'ListProcesses', summary: 'List processes', description: 'The processes this token may start, with the input each one needs.', responses: { 200: { description: 'OK', schema: { type: 'array', items: { $ref: '#/definitions/Process' } } } } } },
+      '/processes/{id}/start': { post: { operationId: 'StartProcess', summary: 'Start a process', description: 'Creates a run: the sequence of tasks of that process. The request form is checked exactly as in the app.',
+        parameters: [par('id', 'path', 'integer', 'Process id', true), { name: 'body', in: 'body', required: true, schema: { $ref: '#/definitions/StartRequest' } }],
+        responses: { 201: { description: 'Started', schema: { $ref: '#/definitions/RunResponse' } }, 422: { description: 'The data does not pass the form checks' } } } },
+      '/runs': { get: { operationId: 'ListRuns', summary: 'List runs', description: 'Find runs by your reference or by status.',
+        parameters: [par('reference', 'query', 'string', 'Your reference'), par('status', 'query', 'string', 'Status (running, done, stuck)'), par('limit', 'query', 'integer', 'Maximum number')],
+        responses: { 200: { description: 'OK', schema: { type: 'object', properties: { runs: { type: 'array', items: { $ref: '#/definitions/Run' } } } } } } } },
+      '/runs/{id}': { get: { operationId: 'GetRun', summary: 'Get a run', description: 'Status, outcome, outputs and tasks of one run.', parameters: [par('id', 'path', 'integer', 'Run id', true)], responses: { 200: { description: 'OK', schema: { $ref: '#/definitions/RunResponse' } } } } },
+      '/forms': { get: { operationId: 'ListForms', summary: 'List forms', description: 'The forms (registers) this token may read or add to, with their fields.', responses: { 200: { description: 'OK', schema: { type: 'array', items: obj } } } } },
+      '/forms/{slug}/records': {
+        get: { operationId: 'ListRecords', summary: 'List records of a form', parameters: [par('slug', 'path', 'string', 'Form name (slug)', true), par('limit', 'query', 'integer', 'Maximum number')], responses: { 200: { description: 'OK', schema: { type: 'object', properties: { records: { type: 'array', items: obj } } } } } },
+        post: { operationId: 'AddRecord', summary: 'Add a record to a form', description: 'Adds a record; the data is checked and written in the standard format.', parameters: [par('slug', 'path', 'string', 'Form name (slug)', true), { name: 'body', in: 'body', required: true, schema: { type: 'object', properties: { data: { ...obj, 'x-ms-summary': 'Record data' } } } }], responses: { 201: { description: 'Added', schema: obj }, 422: { description: 'The data does not pass the form checks' } } },
+      },
+    },
+  };
+  return new Response(JSON.stringify(spec, null, 1), { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300', 'content-disposition': 'inline; filename="ordovia-api.swagger.json"' } });
+}, { public: true });
+
 // ---------------------------------------------------------------- the public example (only where DEMO=1)
 const PERSONAS = { admin: DEMO_ADMIN.email, anna: 'anna@example.com', bram: 'bram@example.com', sanne: 'sanne@example.com', carla: 'carla@example.com', daan: 'daan@example.com', eva: 'eva@example.com' };
 async function ensureDemoData(c) {
@@ -1115,13 +1161,17 @@ route('GET', '/api/files/:id', async (c, { id }) => {
 
 // ---------------------------------------------------------------- documents: the company library (norms, policies, instructions, templates)
 const DOC_KINDS = ['norm', 'policy', 'procedure', 'instruction', 'template', 'other'];
-async function docsByIds(c, ids) {
+/** The documents linked to a step; `sections` ({docId: "chapter 4.2"}) says which part of each one matters at that step. */
+async function docsByIds(c, ids, sections) {
   ids = (ids || []).map(Number).filter(Number.isInteger);
   if (!ids.length) return [];
-  return (await all(c.db, `SELECT d.id, d.name, d.kind, d.version, f.id AS file_id, f.name AS file_name, f.size, f.mime FROM documents d
+  const rows = await all(c.db, `SELECT d.id, d.name, d.kind, d.folder, d.version, f.id AS file_id, f.name AS file_name, f.size, f.mime FROM documents d
     LEFT JOIN document_versions v ON v.document_id = d.id AND v.version = d.version LEFT JOIN files f ON f.id = v.file_id
-    WHERE d.status != 'archived' AND d.id IN (${ids.map(() => '?').join(',')}) ORDER BY d.name`, ...ids));
+    WHERE d.status != 'archived' AND d.id IN (${ids.map(() => '?').join(',')}) ORDER BY d.name`, ...ids);
+  return sections ? rows.map(d => ({ ...d, section: String(sections[d.id] || '') })) : rows;
 }
+/** "Quality / ISO 9001": at most two levels, short names, no slashes inside a name. */
+const cleanFolder = (v) => String(v || '').split('/').map(s => s.trim().replace(/\s+/g, ' ').slice(0, 40)).filter(Boolean).slice(0, 2).join(' / ') || null;
 const docRow = (d, today) => { const due = reviewDueAt(d); return { ...d, reviewDue: due, overdue: !!(due && due < today) }; };
 async function takeFile(c, fileId, tx) {
   const f = await first(c.db, 'SELECT * FROM files WHERE id = ?', Number(fileId));
@@ -1141,7 +1191,7 @@ route('GET', '/api/documents/:id', async (c, { id }) => {
   const versions = await all(c.db, `SELECT v.version, v.note, v.uploaded_at, p.name AS who, f.id AS file_id, f.name AS file_name, f.size FROM document_versions v LEFT JOIN persons p ON p.id = v.uploaded_by
     LEFT JOIN files f ON f.id = v.file_id WHERE v.document_id = ? ORDER BY v.version DESC`, d.id);
   const usedIn = [];
-  for (const fl of await all(c.db, "SELECT id, name, graph FROM flows WHERE status = 'active'")) for (const n of parse(fl.graph, { nodes: [] }).nodes) if ((n.docIds || []).map(Number).includes(d.id)) usedIn.push({ id: fl.id, flow: fl.name, step: n.name });
+  for (const fl of await all(c.db, "SELECT id, name, graph FROM flows WHERE status = 'active'")) for (const n of parse(fl.graph, { nodes: [] }).nodes) if ((n.docIds || []).map(Number).includes(d.id)) usedIn.push({ id: fl.id, flow: fl.name, step: n.name, section: String((n.docSections || {})[d.id] || '') });
   const canManage = !!(c.user.is_admin || (d.owner_id && d.owner_id === c.user.id));
   return { ...docRow(d, now().slice(0, 10)), versions, usedIn, canManage };
 });
@@ -1155,9 +1205,10 @@ async function saveDocument(c, id, b) {
   const area = b.area_id === undefined ? (old ? old.area_id : null) : await areaOf(c, b.area_id);
   const owner = b.owner_id === undefined ? (old ? old.owner_id : c.user.id) : await personOf(c, b.owner_id);
   const status = cleanStatus(b.status, old ? old.status : 'active'), desc = String(b.description === undefined ? (old ? old.description : '') : b.description || '').slice(0, 1000);
-  if (old) { await run(c.db, 'UPDATE documents SET name = ?, kind = ?, description = ?, area_id = ?, owner_id = ?, status = ?, review_months = ?, updated_at = ? WHERE id = ?', name, kind, desc, area, owner, status, months, now(), old.id); return { id: old.id }; }
+  const folder = b.folder === undefined ? (old ? old.folder : null) : cleanFolder(b.folder);
+  if (old) { await run(c.db, 'UPDATE documents SET name = ?, kind = ?, description = ?, area_id = ?, folder = ?, owner_id = ?, status = ?, review_months = ?, updated_at = ? WHERE id = ?', name, kind, desc, area, folder, owner, status, months, now(), old.id); return { id: old.id }; }
   const f = await takeFile(c, b.fileId);
-  const did = await run(c.db, 'INSERT INTO documents(name, kind, description, area_id, owner_id, status, version, review_months, reviewed_at, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?,?,?)', name, kind, desc, area, owner, status, months, now(), now(), now());
+  const did = await run(c.db, 'INSERT INTO documents(name, kind, description, area_id, folder, owner_id, status, version, review_months, reviewed_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,1,?,?,?,?)', name, kind, desc, area, folder, owner, status, months, now(), now(), now());
   await c.db.batch([c.db.prepare('INSERT INTO document_versions(document_id, version, file_id, note, uploaded_by, uploaded_at) VALUES (?,?,?,?,?,?)').bind(did, 1, f.id, String(b.note || '').slice(0, 300), c.user.id, now()),
     c.db.prepare('UPDATE files SET attached_at = ? WHERE id = ?').bind(now(), f.id)]);
   return { id: did };
