@@ -27,6 +27,7 @@
       ${link('#/admin/areas', '◫', 'Manage areas')}
       ${link('#/admin/people', '☺', 'People &amp; tags')}</div>
       <div class="nav-title">Control</div><div class="nav-group">
+      ${link('#/admin/api', '⇌', 'API & web forms', '/admin/api')}
       ${link('#/admin/health', '✚', 'Health', '/admin/health', healthBadge())}
       ${link('#/admin/activity', '☷', 'Activity', '/admin/activity')}
       ${link('#/admin/sql', '⌘', 'SQL console')}
@@ -93,11 +94,7 @@
         <div class="muted small right">${t.due_at ? `<span class="${t.overdue ? 'danger-text' : ''}">${t.overdue ? 'Overdue' : 'Due'} ${esc(fmtDate(t.due_at))}</span><br>` : esc(fmtDate(t.created_at)) + '<br>'}${esc(t.assignee)}</div></a>`).join('')}</div>`
         : '<div class="empty-state card"><p>🎉 Nothing to do right now.</p></div>'}</section>
       <section><h2>Recently started by me</h2>${h.mine.length ? table({ columns: ['Process', 'Status', 'Outcome', 'Started'], values: h.mine.map(i => [i.title, i.status, i.outcome, fmtDate(i.created_at)]) }, { rowAttr: (r, i) => `data-href="#/processes/${h.mine[i].id}" class="clickable"` }) : '<p class="muted">None yet.</p>'}</section></div>`;
-    $$('[data-start]', main).forEach(b => b.onclick = async () => {
-      b.disabled = true;
-      try { const r = await api.post(`/flows/${b.dataset.start}/start`); toast('Process started', 'ok'); refreshBadge(); FB.go(r.taskId ? '#/task/' + r.taskId : '#/processes/' + r.instanceId); }
-      catch (e) { toast(e.message, 'error'); b.disabled = false; }
-    });
+    $$('[data-start]', main).forEach(b => b.onclick = () => FB.org.start(h.flows.find(f => f.id === Number(b.dataset.start)), b));
     clickableRows(main);
   });
   function clickableRows(root) { $$('tr[data-href]', root).forEach(r => r.onclick = () => FB.go(r.dataset.href)); }

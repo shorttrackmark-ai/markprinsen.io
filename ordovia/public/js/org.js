@@ -70,6 +70,15 @@
     catch (e) { toast(e.message, 'error'); if (btn) btn.disabled = false; }
   };
   Org.startFlow = startFlow;
+  /** Start a process: if it has a request form, ask for that first (the same input the API and the public web form take). */
+  Org.start = (flow, btn) => {
+    const form = flow.form_id ? FB.state.meta.forms.find(f => f.id === Number(flow.form_id)) : null;
+    if (!form) return startFlow(flow.id, btn);
+    const box = document.createElement('div');
+    const m = modal(flow.name, box, { wide: true });
+    FB.forms.open(box, form, { context: { initiator: FB.profileOf(FB.state.user.id) }, submitLabel: 'Submit request', onCancel: m.close,
+      onSubmit: async (data) => { const r = await api.post(`/flows/${flow.id}/start`, { data }); m.close(); toast('Request sent', 'ok'); FB.refreshBadge && FB.refreshBadge(); FB.go(r.taskId ? '#/task/' + r.taskId : '#/processes/' + r.instanceId); } });
+  };
 
   // ---------------------------------------------------------------- areas
   FB.route('/areas', async (main) => {
@@ -85,7 +94,7 @@
     const aid = Number(id), a = areaOf(aid);
     if (!a) { main.innerHTML = '<div class="page"><h1>Not found</h1><p class="muted">This area does not exist.</p></div>'; return; }
     const [hb, home, dash] = await Promise.all([api.get('/handbook'), api.get('/home'), api.get('/dashboards')]);
-    const startable = new Set(home.flows.map(f => f.id));
+    const startable = new Map(home.flows.map(f => [f.id, f]));
     const flows = hb.filter(f => f.area_id === aid), forms = FB.state.meta.forms.filter(f => f.area_id === aid && f.status !== 'archived'), dashes = dash.filter(d => d.area_id === aid);
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/areas">← Areas</a><h1><span class="dot" style="background:${esc(a.color || '#4f46e5')}"></span> ${esc(a.name)}</h1>
       <p class="muted">${esc(a.description || '')}${a.owner_id ? ` · owner ${esc(Org.personName(a.owner_id))}` : ''}</p></div></div>
@@ -94,7 +103,7 @@
         <div class="row-actions">${startable.has(f.id) ? `<button class="btn small primary" data-start="${f.id}">Start</button>` : ''}<a class="btn small" href="#/handbook/${f.id}">How it works</a></div></div>`).join('') || '<p class="muted">No processes in this area yet.</p>'}</div></section>
       <section><h2>Data <span class="count">${forms.length}</span></h2><div class="cards">${forms.map(f => `<a class="card link-card" href="#/data/${f.id}"><h3>${esc(f.name)}</h3><p class="small">${esc(f.description || '')}</p></a>`).join('') || '<p class="muted">No forms in this area.</p>'}</div></section>
       <section><h2>Dashboards <span class="count">${dashes.length}</span></h2><div class="cards">${dashes.map(d => `<a class="card link-card" href="#/dashboards/${d.id}"><h3>${esc(d.name)}</h3><p class="muted small">${d.widgets} widget${d.widgets === 1 ? '' : 's'}</p></a>`).join('') || '<p class="muted">No dashboards in this area.</p>'}</div></section></div>`;
-    $$('[data-start]', main).forEach(b => b.onclick = () => startFlow(b.dataset.start, b));
+    $$('[data-start]', main).forEach(b => b.onclick = () => Org.start(startable.get(Number(b.dataset.start)), b));
   });
 
   FB.route('/admin/areas', async (main) => {
@@ -167,4 +176,74 @@
         : types.map(t => `<section><h2>${esc(t)} <span class="count">${r.results.filter(x => x.type === t).length}</span></h2><div class="results">${r.results.filter(x => x.type === t).map(x =>
           `<${x.link ? `a href="${esc(x.link)}"` : 'div'} class="card result"><b>${esc(x.title)}</b><span class="muted small">${esc(x.sub)}</span></${x.link ? 'a' : 'div'}>`).join('')}</div></section>`).join('')}</div>`;
   });
+
+  // ---------------------------------------------------------------- public web form (no sign-in)
+  FB.route('/request/:token', async (main, { token }) => {
+    let d;
+    try { d = await api.get('/public/request/' + encodeURIComponent(token)); }
+    catch (e) { main.innerHTML = `<div class="public-wrap"><div class="card public-card"><h1>Form not available</h1><p class="muted">${esc(e.message)}</p></div></div>`; return; }
+    document.title = d.process + ' · ' + d.company;
+    main.innerHTML = `<div class="public-wrap"><div class="card public-card"><div class="muted small">${esc(d.company)}</div><h1>${esc(d.process)}</h1><p class="muted">${esc(d.description || d.form.description || '')}</p>
+      <div class="row2"><label>Your name<input id="rqName" autocomplete="name"></label><label>Your e-mail<input id="rqMail" type="email" autocomplete="email"></label></div>
+      <input id="rqWeb" name="website" tabindex="-1" autocomplete="off" class="hp" aria-hidden="true">
+      <div id="rqForm"></div><p class="muted small powered">Powered by Ordovia</p></div></div>`;
+    FB.forms.render($('#rqForm', main), d.form, { context: {}, submitLabel: 'Send request',
+      onSubmit: async (data) => {
+        const r = await api.post('/public/request/' + encodeURIComponent(token), { data, website: $('#rqWeb', main).value, requester: { name: $('#rqName', main).value, email: $('#rqMail', main).value } });
+        main.innerHTML = `<div class="public-wrap"><div class="card public-card center"><h1>Thank you</h1><p>Your request has been received.</p><p class="muted">Reference <b>${esc(r.reference)}</b></p></div></div>`;
+      } });
+  }, { public: true });
+
+  // ---------------------------------------------------------------- API: tokens and how to use them
+  FB.route('/admin/api', async (main) => {
+    const [tokens, procs, flows] = await Promise.all([api.get('/admin/tokens'), api.get('/v1/processes'), api.get('/admin/flows')]);
+    const origin = location.origin, ex = procs.find(p => p.input) || procs[0];
+    const sample = ex ? JSON.stringify({ data: Object.fromEntries(((ex.input && ex.input.fields) || []).slice(0, 3).map(f => [f.key, f.type === 'number' ? 1 : 'text'])), reference: 'MY-ORDER-1' }) : '{}';
+    const pubs = flows.filter(f => f.publicToken && f.status === 'active');
+    main.innerHTML = `<div class="page"><div class="page-head"><div><h1>API &amp; web forms</h1><p class="muted">Ordovia is the interface between departments and systems: a process is a service with a defined input (its request form) and a status you can follow. Other tools – your ERP, a website, Outlook flows, Teams – start and follow processes here, instead of e-mail.</p></div>
+      <div class="actions"><button class="btn primary" id="tkNew">+ New API token</button></div></div>
+      <h2>API tokens</h2>
+      ${tokens.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>Acts as</th><th>Token</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
+      ${tokens.map(t => `<tr class="${t.revoked_at ? 'inactive' : ''}"><td>${esc(t.name)}</td><td>${esc(t.person)}</td><td><code>${esc(t.token_hint || '')}</code></td><td>${esc(fmtDate(t.created_at))}</td><td>${esc(fmtDate(t.last_used_at) || 'never')}</td><td>${t.revoked_at ? '<span class="muted">revoked</span>' : `<button class="btn small danger ghost" data-revoke="${t.id}">Revoke</button>`}</td></tr>`).join('')}</tbody></table></div>`
+        : '<p class="muted">No tokens yet. A token lets one system call Ordovia <b>as a chosen person</b>, with exactly that person\'s rights: create a person for the system (e.g. “ERP”) and give it only the tags it needs.</p>'}
+      <h2>Quick start</h2><div class="card"><p class="small muted">Send the token as <code>Authorization: Bearer ord_…</code>. All data is JSON.</p>
+      <pre class="code small">${esc(`# which processes may I start, and what do they need as input?
+curl ${origin}/api/v1/processes -H "Authorization: Bearer ord_…"
+
+# start one (data = the request form's fields; reference = your own number; callbackUrl = where to report back, optional)
+curl -X POST ${origin}/api/v1/processes/${ex ? ex.id : 1}/start -H "Authorization: Bearer ord_…" -H "Content-Type: application/json" \\
+  -d '${sample.replace(/}$/, ', "callbackUrl": "https://example.com/hooks/ordovia"}')}'
+
+# follow it: status, outcome, outputs and tasks (by id, or find yours by reference)
+curl ${origin}/api/v1/runs/123 -H "Authorization: Bearer ord_…"
+curl "${origin}/api/v1/runs?reference=MY-ORDER-1" -H "Authorization: Bearer ord_…"
+
+# data: list forms, read and add records
+curl ${origin}/api/v1/forms -H "Authorization: Bearer ord_…"
+curl ${origin}/api/v1/forms/supplier/records -H "Authorization: Bearer ord_…"`)}</pre>
+      <p class="small"><b>Callbacks.</b> With <code>callbackUrl</code> (https) Ordovia posts <code>{"event":"run.finished"|"run.stuck","run":{…},"outputs":{…}}</code> when the run ends. <b>Outgoing:</b> a Webhook step in a flow calls any system during a process.</p></div>
+      <h2>Processes you can call <span class="count">${procs.length}</span></h2>
+      ${procs.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Process</th><th>Area</th><th>Input (request form)</th><th>Start</th></tr></thead><tbody>${procs.map(p => `<tr><td><b>${esc(p.name)}</b></td><td>${esc(p.area || '–')}</td><td class="small">${p.input ? p.input.fields.map(f => `<code>${esc(f.key)}</code>${f.required ? '*' : ''} <span class="muted">${esc(f.type)}</span>`).join(' · ') : '<span class="muted">none – starts without input</span>'}</td><td><code>POST /api/v1/processes/${p.id}/start</code></td></tr>`).join('')}</tbody></table></div><p class="small muted">* required</p>` : '<p class="muted">No active processes yet.</p>'}
+      <h2>Public web forms <span class="count">${pubs.length}</span></h2>
+      ${pubs.length ? `<div class="table-wrap"><table class="grid"><tbody>${pubs.map(f => `<tr><td><b>${esc(f.name)}</b></td><td><input readonly class="mono link-input" value="${esc(origin + '/#/request/' + f.publicToken)}"></td><td><a class="btn small" target="_blank" rel="noopener" href="/#/request/${esc(f.publicToken)}">Open</a></td></tr>`).join('')}</tbody></table></div>`
+        : '<p class="muted">None. Open a flow, click on the white canvas, choose a request form and tick “Public web form”: anyone with the link can then send the request without signing in – ideal for other departments, customers or suppliers.</p>'}</div>`;
+    $$('[data-revoke]', main).forEach(b => b.onclick = async () => { if (confirm('Revoke this token? Systems using it stop working immediately.')) { await api.del('/admin/tokens/' + b.dataset.revoke); FB.render(); } });
+    $$('.link-input', main).forEach(i => i.onclick = () => i.select());
+    $('#tkNew', main).onclick = () => {
+      const m = modal('New API token', `<form id="tkf"><label>Name <small class="muted">(the system that will use it)</small><input name="name" required placeholder="e.g. ERP, website, Outlook flow"></label>
+        <label>Acts as<select name="person_id" required><option value="">– choose a person –</option>${people().map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
+        <p class="hint">The token has exactly this person's rights. Best practice: create a person for the system (People &amp; tags) and give it only the tags it needs – not an administrator.</p>
+        <div class="form-actions"><button class="btn primary">Create token</button></div></form>`);
+      $('#tkf', m.root).onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          const r = await api.post('/admin/tokens', { name: e.target.name.value, person_id: Number(e.target.person_id.value) });
+          m.body.innerHTML = `<p><b>Copy this token now.</b> It is shown only once; Ordovia keeps just a fingerprint.</p><input readonly class="mono link-input" id="tkVal" value="${esc(r.token)}"><div class="form-actions"><button class="btn" id="tkCopy">Copy</button><button class="btn primary" id="tkDone">Done</button></div>`;
+          $('#tkVal', m.body).select();
+          $('#tkCopy', m.body).onclick = () => navigator.clipboard.writeText(r.token).then(() => toast('Copied', 'ok'));
+          $('#tkDone', m.body).onclick = () => { m.close(); FB.render(); };
+        } catch (err) { toast(err.message, 'error'); }
+      };
+    };
+  }, { admin: true });
 })();

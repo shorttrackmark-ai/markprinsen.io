@@ -57,6 +57,53 @@ r = await get('/api/admin/audit'); ok(r.data.some(a => a.entity === 'process' &&
 r = await post('/api/admin/sql', { sql: 'select 1 as x' }); r = await get('/api/admin/audit'); ok(!r.data.some(a => a.action === 'ran' && /select 1/.test(a.detail || '')), 'read-only SQL is not logged');
 r = await post('/api/admin/sql', { sql: "update settings set value = value where key = 'zzz'" }); r = await get('/api/admin/audit'); ok(r.data.some(a => a.action === 'ran'), 'SQL that writes is logged');
 
+console.log('request forms, public web form, API');
+{
+  // a request form + a process that uses it as its input, open as a public web form, with a task for Eva (Finance)
+  r = await post('/api/admin/forms', { name: 'Quote request' }); const qfId = r.data.id;
+  r = await get('/api/admin/forms/' + qfId); const qf = r.data.form;
+  qf.fields = [{ key: 'company', label: 'Company', type: 'text', required: true }, { key: 'amount', label: 'Amount', type: 'number', required: true, min: 1 }, { key: 'note', label: 'Note', type: 'text' }];
+  r = await put('/api/admin/forms/' + qfId, { ...qf }); ok(r.status === 200, 'create the request form', r.data);
+  const people = (await get('/api/meta')).data.people, eva = people.find(p => p.name.startsWith('Eva'));
+  const approval = (await get('/api/meta')).data.forms.find(f => f.name === 'Approval');
+  const graph = { nodes: [{ id: 's', type: 'start', name: 'Start', formId: qfId, publicEnabled: true, title: '"Quote " & company' }, { id: 't', type: 'task', name: 'Check the quote', formId: approval.id, assignee: { type: 'person', personId: eva.id } }, { id: 'e', type: 'end', name: 'Done' }],
+    edges: [{ id: 'e1', from: 's', to: 't' }, { id: 'e2', from: 't', to: 'e' }] };
+  r = await post('/api/admin/flows', { name: 'Quote' }); const qId = r.data.id;
+  r = await put('/api/admin/flows/' + qId, { name: 'Quote', description: 'Ask Finance for a quote', graph, doc: {}, status: 'active' }); ok(r.status === 200 && r.data.status === 'active', 'activate a process with a request form', r.data);
+  const token = r.data.graph.nodes[0].publicToken; ok(/^[a-f0-9]{24}$/.test(token || ''), 'the server made a public link token', token);
+  // public: no login
+  const saved = cookie; cookie = '';
+  r = await get('/api/public/request/' + token); ok(r.status === 200 && r.data.form.fields.length === 3 && !r.data.form.checks.length, 'public form is readable without login', r.data);
+  r = await get('/api/public/request/' + 'a'.repeat(24)); ok(r.status === 404, 'unknown public link is a 404');
+  r = await post('/api/public/request/' + token, { data: { company: 'ACME', amount: 0 }, requester: { name: 'Joe', email: 'joe@acme.test' } }); ok(r.status === 422 && r.data.errors.amount, 'public form is validated on the server', r.data);
+  r = await post('/api/public/request/' + token, { data: { company: 'ACME', amount: 500 }, requester: { name: 'Joe', email: 'joe@acme.test' } }); ok(r.status === 200 && /^#\d+/.test(r.data.reference), 'a visitor submits the public form', r.data);
+  r = await get('/api/admin/flows'); ok(true, 'flows list still works');
+  // API token
+  cookie = saved;
+  r = await post('/api/admin/tokens', { name: 'Test system', person_id: people.find(p => p.name.startsWith('Bram')).id }); ok(r.status === 200 && /^ord_/.test(r.data.token), 'create an API token (shown once)', r.data);
+  const api = r.data.token, tid = r.data.id; cookie = '';
+  const A = (m, p, b) => call(m, p, b, { authorization: 'Bearer ' + api });
+  r = await A('GET', '/api/v1/ping'); ok(r.status === 200 && /Bram/.test(r.data.as), 'token authenticates as its person', r.data);
+  r = await call('GET', '/api/v1/ping', null, { authorization: 'Bearer ord_nope' }); ok(r.status === 401, 'a wrong token is refused');
+  r = await A('GET', '/api/v1/processes'); const q = (r.data || []).find(p => p.name === 'Quote'); ok(!!q && q.input && q.input.fields.length === 3, 'API lists processes with their input fields', r.data);
+  r = await A('POST', '/api/v1/processes/' + qId + '/start', { data: { company: 'Initech', amount: 'x' } }); ok(r.status === 422, 'API validates the input', r.data);
+  r = await A('POST', '/api/v1/processes/' + qId + '/start', { data: { company: 'Initech', amount: 900 }, reference: 'PO-77' }); ok(r.status === 201 && r.data.run.reference === 'PO-77' && r.data.run.status === 'running', 'API starts a run', r.data);
+  const runId = r.data.run.id;
+  r = await A('GET', '/api/v1/runs/' + runId); ok(r.status === 200 && r.data.run.tasks[0].name === 'Check the quote' && r.data.run.outputs.company === 'Initech', 'API reads the run with outputs and tasks', r.data);
+  r = await A('GET', '/api/v1/runs?reference=PO-77'); ok(r.data.runs.length === 1, 'API finds a run by the caller\'s own reference', r.data);
+  r = await A('GET', '/api/admin/audit'); ok(r.status === 403, 'a token of a normal person cannot use admin routes');
+  r = await A('GET', '/api/v1/forms'); ok(r.status === 200 && Array.isArray(r.data), 'API lists forms');
+  cookie = saved;
+  r = await get('/api/admin/tokens'); ok(r.data.length === 1 && r.data[0].last_used_at, 'token list shows last use', r.data);
+  r = await del('/api/admin/tokens/' + tid); ok(r.status === 200, 'revoke the token'); cookie = '';
+  r = await A('GET', '/api/v1/ping'); ok(r.status === 401, 'a revoked token stops working');
+  cookie = saved;
+  r = await get('/api/instances'); ok(r.data.some(i => i.source === 'web') && r.data.some(i => i.source === 'api'), 'runs remember where they came from (web / api)', r.data.slice(0, 3).map(i => i.source));
+  // a public flow may not depend on an initiator
+  const bad = JSON.parse(JSON.stringify(graph)); bad.nodes[1].assignee = { type: 'initiator' };
+  r = await put('/api/admin/flows/' + qId, { name: 'Quote', description: '', graph: bad, doc: {}, status: 'active' }); ok(r.data.status === 'draft' && /public web form/.test(r.data.note || ''), 'public form + initiator routing is refused (falls back to draft)', r.data);
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');

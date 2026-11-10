@@ -386,3 +386,13 @@ a.result:hover { border-color: var(--primary); text-decoration: none; }
 .health .hi { font-size: 16px; }
 @media (max-width: 800px) { .search { display: none; } }
 [hidden] { display: none !important; }
+
+/* ---------- public web form, API page ---------- */
+.public-wrap { min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; }
+.public-card { width: 100%; max-width: 640px; padding: 28px; }
+.public-card h1 { margin: 4px 0 6px; }
+.powered { text-align: right; margin: 20px 0 0; }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+.link-row { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; }
+.link-row input, .link-input { flex: 1; width: 100%; }
+body.logged-out main { margin: 0; padding: 0; width: 100%; }

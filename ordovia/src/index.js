@@ -51,7 +51,8 @@ export default {
     const c = new Ctx(req, env, exec);
     try {
       // CSRF protection: state-changing calls must carry our custom header (forces a CORS preflight cross-site).
-      if (req.method !== 'GET' && req.headers.get('x-ordovia') !== '1') throw new HttpError(403, 'Missing request header');
+      const bearer = /^bearer\s+ord_/i.test(req.headers.get('authorization') || '');
+      if (req.method !== 'GET' && !bearer && req.headers.get('x-ordovia') !== '1') throw new HttpError(403, 'Missing request header');
       await authenticate(c);
       for (const r of routes) {
         if (r.method !== req.method) continue;
@@ -99,6 +100,16 @@ async function postJSON(url, payload) {
 
 // ---------------------------------------------------------------- auth
 async function authenticate(c) {
+  const auth = c.req.headers.get('authorization') || '';
+  if (/^bearer\s+ord_/i.test(auth)) {
+    const raw = auth.replace(/^bearer\s+/i, '').trim();
+    const t = await first(c.db, 'SELECT t.id, t.person_id FROM api_tokens t JOIN persons p ON p.id = t.person_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND p.active = 1', await sha256(raw));
+    if (!t) throw new HttpError(401, 'Invalid or revoked API token');
+    c.user = await first(c.db, 'SELECT id, name, email, is_admin FROM persons WHERE id = ?', t.person_id);
+    c.viaToken = t.id;
+    c.exec.waitUntil(run(c.db, 'UPDATE api_tokens SET last_used_at = ? WHERE id = ?', now(), t.id));
+    return;
+  }
   const token = readCookie(c.req, COOKIE);
   if (!token) return;
   const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin FROM sessions s JOIN persons p ON p.id = s.person_id
@@ -193,7 +204,7 @@ route('GET', '/api/home', async (c) => {
   const flows = (await all(c.db, "SELECT id, name, description, graph, area_id, status FROM flows WHERE status = 'active' OR (status = 'draft' AND ? = 1) ORDER BY name", c.user.is_admin ? 1 : 0)).filter(f => {
     const s = startNode(parse(f.graph, { nodes: [] }));
     return s && tagRule(c.user, D, s.startTags);
-  }).map(f => ({ id: f.id, name: f.name, description: f.description, area_id: f.area_id, status: f.status }));
+  }).map(f => ({ id: f.id, name: f.name, description: f.description, area_id: f.area_id, status: f.status, form_id: (startNode(parse(f.graph, { nodes: [] })) || {}).formId || null }));
   const mine = await all(c.db, 'SELECT * FROM v_instances WHERE id IN (SELECT id FROM instances WHERE started_by = ?) ORDER BY created_at DESC LIMIT 8', c.user.id);
   return { tasks: await openTasksFor(c, c.user.id), flows, mine };
 });
@@ -201,26 +212,49 @@ route('GET', '/api/home', async (c) => {
 route('POST', '/api/flows/:id/start', async (c, { id }) => {
   const flow = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
   if (!flow) throw new HttpError(404, 'Flow not found');
+  let b = {}; try { b = (await c.body()) || {}; } catch { /* an empty body is fine */ }
+  return startRun(c, flow, { data: b.data, source: c.viaToken ? 'api' : 'app', ref: b.reference, callback: b.callbackUrl });
+});
+
+/**
+ * Start a run of a process. The one place where runs begin: the app, the API and public web forms all come through here.
+ * Checks status, readiness and who may start; validates the request form (the process's input) on the server.
+ * opts: { data, source: 'app'|'api'|'web', ref, callback, requester: {name, email} (web: nobody is signed in) }
+ */
+async function startRun(c, flow, opts) {
   const graph = parse(flow.graph, { nodes: [], edges: [] });
   const forms = await c.forms();
-  if (flow.status === 'archived' || (flow.status === 'draft' && !c.user.is_admin)) throw new HttpError(409, 'This process is not in use (status: ' + flow.status + ')');
-  const errs = FB.logic.lintFlow(graph, forms.filter(f => f.status !== 'archived').map(f => f.id));
+  if (flow.status === 'archived' || (flow.status === 'draft' && !(c.user && c.user.is_admin))) throw new HttpError(409, 'This process is not in use (status: ' + flow.status + ')');
+  const errs = FB.logic.lintFlow(graph, forms.filter(f => f.status !== 'archived').map(f => f.id), forms);
   if (errs.length) throw new HttpError(400, 'This process is not ready: ' + errs[0]);
-  const D = await c.dir();
-  const s = startNode(graph);
-  if (!D.hasTags(c.user.id, s.startTags) && !c.user.is_admin) throw new HttpError(403, 'You may not start this process');
-  const vars = { initiator: D.profile(c.user.id), process: flow.name };
-  const iid = await run(c.db, 'INSERT INTO instances(flow_id, flow_version, graph, title, status, vars, started_by, created_at) VALUES (?,?,?,?,?,?,?,?)',
-    flow.id, flow.version, flow.graph, flow.name, 'running', JSON.stringify(vars), c.user.id, now());
-  const proc = { id: iid, flowName: flow.name, graph, vars, title: `${flow.name} #${iid}`, status: 'running', started_by: c.user.id, finished_at: null };
+  const D = await c.dir(), s = startNode(graph);
+  if (opts.source !== 'web' && !D.hasTags(c.user.id, s.startTags) && !c.user.is_admin) throw new HttpError(403, 'You may not start this process');
+  if (opts.callback && !/^https:\/\//.test(opts.callback)) throw new HttpError(400, 'callbackUrl must start with https://');
+  const ref = opts.ref == null || opts.ref === '' ? null : String(opts.ref).slice(0, 120);
+  const initiator = opts.source === 'web' ? { name: (opts.requester && opts.requester.name) || 'Web form', email: (opts.requester && opts.requester.email) || '' } : D.profile(c.user.id);
+  const vars = { initiator, process: flow.name };
+  let formRes = null, startForm = null;
+  if (s.formId) {
+    startForm = forms.find(f => f.id === Number(s.formId));
+    formRes = await finalizeForm(c, startForm, opts.data || {}, { initiator });
+    if (!formRes.ok) throw new HttpError(422, 'Please check the form', { errors: formRes.errors, formErrors: formRes.formErrors });
+  }
+  const starter = opts.source === 'web' ? null : c.user.id;
+  const iid = await run(c.db, 'INSERT INTO instances(flow_id, flow_version, graph, title, status, vars, started_by, created_at, source, external_ref, callback_url) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    flow.id, flow.version, flow.graph, flow.name, 'running', JSON.stringify(vars), starter, now(), opts.source || 'app', ref, opts.callback || null);
+  const proc = { id: iid, flowName: flow.name, graph, vars, title: `${flow.name} #${iid}`, status: 'running', started_by: starter, finished_at: null, ref, callback: opts.callback || null };
   const tx = new Tx(c.db);
   const io = await runtimeIO(c, tx, proc);
-  io.log(`Started by ${c.user.name}`, c.user.id);
+  io.log(opts.source === 'web' ? `Request received from the web form (${initiator.name}${initiator.email ? ', ' + initiator.email : ''})` : opts.source === 'api' ? `Started through the API by ${c.user.name}${ref ? ' (reference ' + ref + ')' : ''}` : `Started by ${c.user.name}`, starter);
+  if (startForm) {
+    tx.add('INSERT INTO submissions(form_id, person_id, instance_id, data, created_at) VALUES (?,?,?,?,?)', startForm.id, starter, iid, JSON.stringify(formRes.data), now());
+    mergeFormData(proc, startForm, formRes.data, formRes.linked);
+  }
   advance(proc, s.id, io);
   await finishProc(c, tx, proc);
-  const next = (await openTasksFor(c, c.user.id)).find(t => t.instance_id === iid);
-  return { instanceId: iid, taskId: next ? next.id : null };
-});
+  const next = c.user ? (await openTasksFor(c, c.user.id)).find(t => t.instance_id === iid) : null;
+  return { instanceId: iid, taskId: next ? next.id : null, reference: ref };
+}
 
 async function runtimeIO(c, tx, proc) {
   const D = await c.dir();
@@ -244,8 +278,11 @@ async function runtimeIO(c, tx, proc) {
 async function finishProc(c, tx, proc) {
   tx.add('UPDATE instances SET vars = ?, status = ?, title = ?, finished_at = ? WHERE id = ?', JSON.stringify(proc.vars), proc.status, proc.title, proc.finished_at, proc.id);
   await tx.commit();
+  if (proc.callback && (proc.status === 'done' || proc.status === 'stuck')) tx.after.push({ url: proc.callback, payload: { event: 'run.' + (proc.status === 'done' ? 'finished' : 'stuck'), run: runInfo(proc, c.url.origin), outputs: publicVars(proc.vars) } });
   if (tx.after.length) c.exec.waitUntil(Promise.all(tx.after.map(h => postJSON(h.url, h.payload))));
 }
+const publicVars = (vars) => { const o = { ...vars }; delete o.initiator; delete o.process; return o; };
+const runInfo = (proc, origin) => ({ id: proc.id, process: proc.flowName, status: proc.status, outcome: (proc.vars || {}).outcome ?? null, reference: proc.ref ?? null, url: origin + '/#/processes/' + proc.id });
 
 /** Validate a form submission on the server: types, lookups, calculations, rules. */
 async function finalizeForm(c, form, input, context) {
@@ -290,13 +327,13 @@ route('GET', '/api/tasks/:id', async (c, { id }) => {
 
 route('POST', '/api/tasks/:id/complete', async (c, { id }) => {
   const b = await c.body();
-  const t = await first(c.db, 'SELECT t.*, i.vars, i.title, i.started_by, i.graph, i.status AS istatus, f.name AS flow_name FROM tasks t JOIN instances i ON i.id = t.instance_id JOIN flows f ON f.id = i.flow_id WHERE t.id = ?', Number(id));
+  const t = await first(c.db, 'SELECT t.*, i.vars, i.title, i.started_by, i.graph, i.status AS istatus, i.external_ref, i.callback_url, f.name AS flow_name FROM tasks t JOIN instances i ON i.id = t.instance_id JOIN flows f ON f.id = i.flow_id WHERE t.id = ?', Number(id));
   if (!t) throw new HttpError(404, 'Task not found');
   if (t.status !== 'open') throw new HttpError(409, 'This task is no longer open');
   const D = await c.dir();
   const inst = { id: t.instance_id, started_by: t.started_by, vars: t.vars };
   if (!D.matches(c.user.id, parse(t.assignee, {}), inst)) throw new HttpError(403, 'This task is assigned to someone else');
-  const proc = { id: t.instance_id, flowName: t.flow_name, graph: parse(t.graph, { nodes: [], edges: [] }), vars: parse(t.vars, {}), title: t.title, status: t.istatus, started_by: t.started_by, finished_at: null };
+  const proc = { id: t.instance_id, flowName: t.flow_name, graph: parse(t.graph, { nodes: [], edges: [] }), vars: parse(t.vars, {}), title: t.title, status: t.istatus, started_by: t.started_by, finished_at: null, ref: t.external_ref, callback: t.callback_url };
   const tx = new Tx(c.db);
   // Guard against double completion inside the same atomic batch.
   tx.add("UPDATE tasks SET status = 'done', completed_by = ?, completed_at = ? WHERE id = ? AND status = 'open'", c.user.id, now(), t.id);
@@ -530,19 +567,20 @@ route('DELETE', '/api/admin/forms/:id', async (c, { id }) => {
 
 // ---------------------------------------------------------------- admin: flows
 route('GET', '/api/admin/flows', async (c) => {
-  const forms = (await c.forms()).filter(f => f.status !== 'archived').map(f => f.id);
+  const allForms = await c.forms(), forms = allForms.filter(f => f.status !== 'archived').map(f => f.id);
   const stats = Object.fromEntries((await all(c.db, "SELECT flow_id, count(*) AS n, sum(status = 'running') AS r FROM instances GROUP BY flow_id")).map(r => [r.flow_id, r]));
   return (await all(c.db, 'SELECT * FROM flows ORDER BY name')).map(f => {
     const g = parse(f.graph, { nodes: [], edges: [] }), due = reviewDueAt(f);
-    return { id: f.id, name: f.name, description: f.description, version: f.version, steps: g.nodes.length, issues: FB.logic.lintFlow(g, forms).length, runs: stats[f.id]?.n || 0, running: stats[f.id]?.r || 0,
-      area_id: f.area_id, status: f.status, owner_id: f.owner_id, reviewDue: due, overdue: !!(due && due < now().slice(0, 10)), updated_at: f.updated_at };
+    return { id: f.id, name: f.name, description: f.description, version: f.version, steps: g.nodes.length, issues: FB.logic.lintFlow(g, forms, allForms).length, runs: stats[f.id]?.n || 0, running: stats[f.id]?.r || 0,
+      area_id: f.area_id, status: f.status, owner_id: f.owner_id, reviewDue: due, overdue: !!(due && due < now().slice(0, 10)), updated_at: f.updated_at,
+      startForm: (startNode(g) || {}).formId || null, publicToken: (startNode(g) || {}).publicEnabled ? (startNode(g) || {}).publicToken || null : null };
   });
 }, { admin: true });
 route('GET', '/api/admin/flows/:id', async (c, { id }) => {
   const f = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
   if (!f) throw new HttpError(404, 'Flow not found');
-  const forms = (await c.forms()).filter(x => x.status !== 'archived').map(x => x.id);
-  return { ...f, graph: parse(f.graph, { nodes: [], edges: [] }), doc: parse(f.doc, {}), issues: FB.logic.lintFlow(parse(f.graph, { nodes: [], edges: [] }), forms), reviewDue: reviewDueAt(f) };
+  const allForms = await c.forms(), forms = allForms.filter(x => x.status !== 'archived').map(x => x.id);
+  return { ...f, graph: parse(f.graph, { nodes: [], edges: [] }), doc: parse(f.doc, {}), issues: FB.logic.lintFlow(parse(f.graph, { nodes: [], edges: [] }), forms, allForms), reviewDue: reviewDueAt(f) };
 }, { admin: true });
 route('POST', '/api/admin/flows', async (c) => {
   const b = await c.body();
@@ -557,9 +595,13 @@ route('PUT', '/api/admin/flows/:id', async (c, { id }) => {
   if (!f) throw new HttpError(404, 'Flow not found');
   const b = await c.body();
   const graphObj = b.graph || { nodes: [], edges: [] };
+  const st0 = startNode(graphObj);
+  if (st0 && st0.publicEnabled && !/^[a-f0-9]{24}$/.test(st0.publicToken || '')) st0.publicToken = randomToken().slice(0, 24);   // (the public link: unguessable, made by the server)
+  if (st0 && !st0.publicEnabled) delete st0.publicToken;
   const graph = JSON.stringify(graphObj);
   const version = graph !== f.graph ? f.version + 1 : f.version; // running processes keep their own snapshot
-  const issues = FB.logic.lintFlow(graphObj, (await c.forms()).filter(x => x.status !== 'archived').map(x => x.id));
+  const allForms = await c.forms();
+  const issues = FB.logic.lintFlow(graphObj, allForms.filter(x => x.status !== 'archived').map(x => x.id), allForms);
   let status = cleanStatus(b.status, f.status), note = '';
   if (status === 'active' && issues.length) {
     if (f.status === 'active') { status = 'draft'; note = 'Saved as draft: an active process may not have open issues (' + issues[0] + ')'; }
@@ -571,7 +613,7 @@ route('PUT', '/api/admin/flows/:id', async (c, { id }) => {
     b.area_id === undefined ? f.area_id : await areaOf(c, b.area_id), status, b.owner_id === undefined ? f.owner_id : await personOf(c, b.owner_id), months, now(), f.id);
   if (version !== f.version) await snapshotFlow(c, { id: f.id, name: String(b.name || f.name), graph, doc: JSON.stringify(b.doc || {}), version });
   if (status !== f.status) c.note(String(b.name || f.name), 'Status: ' + f.status + ' → ' + status);
-  return { version, issues, status, note };
+  return { version, issues, status, note, graph: graphObj };
 }, { admin: true });
 route('DELETE', '/api/admin/flows/:id', async (c, { id }) => {
   const f = await first(c.db, 'SELECT id, name, status FROM flows WHERE id = ?', Number(id));
@@ -602,7 +644,7 @@ route('POST', '/api/admin/flows/:id/restore', async (c, { id }) => {
   const f = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
   const v = await first(c.db, 'SELECT * FROM flow_versions WHERE id = ? AND flow_id = ?', Number((await c.body()).versionId), Number(id));
   if (!f || !v) throw new HttpError(404, 'Version not found');
-  const issues = FB.logic.lintFlow(parse(v.graph, { nodes: [], edges: [] }), (await c.forms()).filter(x => x.status !== 'archived').map(x => x.id));
+  const allF = await c.forms(), issues = FB.logic.lintFlow(parse(v.graph, { nodes: [], edges: [] }), allF.filter(x => x.status !== 'archived').map(x => x.id), allF);
   const version = f.version + 1, status = f.status === 'active' && issues.length ? 'draft' : f.status;
   await run(c.db, 'UPDATE flows SET graph = ?, doc = ?, version = ?, status = ?, updated_at = ? WHERE id = ?', v.graph, v.doc || '{}', version, status, now(), f.id);
   await snapshotFlow(c, { id: f.id, name: f.name, graph: v.graph, doc: v.doc || '{}', version });
@@ -749,7 +791,7 @@ route('GET', '/api/admin/health', async (c) => {
   for (const f of flows) {
     const g = parse(f.graph, { nodes: [], edges: [] });
     g.nodes.forEach(n => { if (n.formId) usedForms.add(Number(n.formId)); });
-    const issues = FB.logic.lintFlow(g, liveForms.map(x => x.id)), link = '#/admin/flows/' + f.id;
+    const issues = FB.logic.lintFlow(g, liveForms.map(x => x.id), forms), link = '#/admin/flows/' + f.id;
     if (f.status === 'active' && issues.length) add('error', 'process', f.name + ' is active but has issues', issues.slice(0, 3).join(' · '), link);
     // can anybody actually receive each task?
     for (const n of g.nodes.filter(x => x.type === 'task')) {
@@ -817,3 +859,115 @@ route('GET', '/api/search', async (c) => {
   }
   return { q, results: res };
 });
+
+// ---------------------------------------------------------------- public web forms: a process's request form, open to anyone with the link
+const publicFlow = async (c, token) => {
+  if (!/^[a-f0-9]{24}$/.test(token || '')) throw new HttpError(404, 'This form does not exist');
+  const rows = await all(c.db, "SELECT * FROM flows WHERE status = 'active' AND graph LIKE ?", '%"publicToken":"' + token + '"%');
+  for (const f of rows) { const st = startNode(parse(f.graph, { nodes: [] })); if (st && st.publicEnabled && st.publicToken === token) return { flow: f, start: st }; }
+  throw new HttpError(404, 'This form does not exist or is closed');
+};
+const cleanFormForPublic = (f) => ({ name: f.name, description: f.description || '', fields: f.fields.map(x => ({ key: x.key, label: x.label, type: x.type, required: !!x.required, options: x.options, placeholder: x.placeholder, help: x.help, default: x.default, formula: x.formula, visibleIf: x.visibleIf, min: x.min, max: x.max, validate: x.validate, validateMsg: x.validateMsg })), checks: [] });
+route('GET', '/api/public/request/:token', async (c, { token }) => {
+  const { flow, start } = await publicFlow(c, token);
+  const form = (await c.formsMap()).get(Number(start.formId));
+  if (!form || form.status === 'archived') throw new HttpError(404, 'This form is closed');
+  const s = await c.settings();
+  return { company: s.company || 'Ordovia', process: flow.name, description: flow.description || '', form: cleanFormForPublic(form) };
+}, { public: true });
+route('POST', '/api/public/request/:token', async (c, { token }) => {
+  const { flow } = await publicFlow(c, token);
+  const b = await c.body();
+  if (b.website) return { ok: true, reference: 'ok' };   // (a hidden field only robots fill in)
+  if (JSON.stringify(b).length > 60000) throw new HttpError(413, 'This request is too large');
+  const recent = await first(c.db, "SELECT count(*) AS n FROM instances WHERE flow_id = ? AND source = 'web' AND created_at > ?", flow.id, new Date(Date.now() - 3600000).toISOString().slice(0, 19).replace('T', ' '));
+  if (recent.n >= 60) throw new HttpError(429, 'Too many requests right now, please try again in a while');
+  const r = await startRun(c, flow, { data: b.data, source: 'web', requester: { name: String((b.requester && b.requester.name) || '').slice(0, 120), email: String((b.requester && b.requester.email) || '').slice(0, 160) } });
+  return { ok: true, reference: '#' + r.instanceId };
+}, { public: true });
+
+// ---------------------------------------------------------------- API tokens (other systems call Ordovia as a chosen person)
+route('GET', '/api/admin/tokens', async (c) => all(c.db, 'SELECT t.id, t.name, t.token_hint, t.person_id, p.name AS person, t.created_at, t.last_used_at, t.revoked_at FROM api_tokens t JOIN persons p ON p.id = t.person_id ORDER BY t.id DESC'), { admin: true });
+route('POST', '/api/admin/tokens', async (c) => {
+  const b = await c.body();
+  const name = String(b.name || '').trim().slice(0, 80);
+  if (!name) throw new HttpError(400, 'Give the token a name, e.g. the system that will use it');
+  const pid = await personOf(c, b.person_id);
+  if (!pid) throw new HttpError(400, 'Choose the person this token acts as');
+  const token = 'ord_' + randomToken();
+  const id = await run(c.db, 'INSERT INTO api_tokens(name, token_hash, token_hint, person_id, created_by, created_at) VALUES (?,?,?,?,?,?)', name, await sha256(token), token.slice(0, 8) + '…' + token.slice(-4), pid, c.user.id, now());
+  c.note(name, 'acts as ' + (await c.dir()).persons.get(pid).name);
+  return { id, token };   // (shown once: only its hash is kept)
+}, { admin: true });
+route('DELETE', '/api/admin/tokens/:id', async (c, { id }) => {
+  const t = await first(c.db, 'SELECT id, name FROM api_tokens WHERE id = ?', Number(id));
+  if (!t) throw new HttpError(404, 'Token not found');
+  c.note(t.name, 'revoked');
+  await run(c.db, 'UPDATE api_tokens SET revoked_at = ? WHERE id = ?', now(), t.id);
+}, { admin: true });
+
+// ---------------------------------------------------------------- API v1: a stable, small surface for other systems
+// Authenticate with  Authorization: Bearer ord_...  (create tokens under Control > API). Everything runs as the person the token belongs to,
+// so the same permissions apply as in the app.
+const fieldSpec = (f) => ({ key: f.key, label: f.label, type: f.type, required: !!f.required, ...(f.options ? { options: f.options } : {}), ...(f.type === 'calc' ? { calculated: true } : {}) });
+const inputSpec = (form) => form ? { form: form.name, fields: form.fields.filter(f => f.type !== 'heading' && f.type !== 'calc').map(fieldSpec) } : null;
+route('GET', '/api/v1/processes', async (c) => {
+  const D = await c.dir(), forms = await c.formsMap();
+  const areas = new Map((await all(c.db, 'SELECT id, name FROM areas')).map(a => [a.id, a.name]));
+  return (await all(c.db, "SELECT id, name, description, graph, area_id, status FROM flows WHERE status = 'active' ORDER BY name")).flatMap(f => {
+    const st = startNode(parse(f.graph, { nodes: [] }));
+    if (!st || !(c.user.is_admin || D.hasTags(c.user.id, st.startTags))) return [];
+    return [{ id: f.id, name: f.name, description: f.description || '', area: areas.get(f.area_id) || null, input: inputSpec(forms.get(Number(st.formId))), start: '/api/v1/processes/' + f.id + '/start' }];
+  });
+});
+route('POST', '/api/v1/processes/:id/start', async (c, { id }) => {
+  const flow = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
+  if (!flow) throw new HttpError(404, 'Process not found');
+  let b = {}; try { b = (await c.body()) || {}; } catch { /* empty body */ }
+  const r = await startRun(c, flow, { data: b.data, source: 'api', ref: b.reference, callback: b.callbackUrl });
+  return new Response(JSON.stringify({ run: await runView(c, r.instanceId) }), { status: 201, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+});
+async function runView(c, iid) {
+  const raw = await first(c.db, 'SELECT * FROM instances WHERE id = ?', Number(iid));
+  if (!raw) throw new HttpError(404, 'Run not found');
+  if (!(await canSeeInstance(c, raw))) throw new HttpError(403, 'No access to this run');
+  const D = await c.dir(), vars = parse(raw.vars, {});
+  const [info, tasks] = await Promise.all([first(c.db, 'SELECT * FROM v_instances WHERE id = ?', raw.id), all(c.db, 'SELECT name, status, assignee, due_at, completed_at FROM tasks WHERE instance_id = ? ORDER BY id', raw.id)]);
+  return { id: raw.id, process: info.flow, title: raw.title, status: raw.status, outcome: vars.outcome ?? null, reference: raw.external_ref, source: raw.source, created_at: raw.created_at, finished_at: raw.finished_at,
+    outputs: publicVars(vars), tasks: tasks.map(t => ({ name: t.name, status: t.status, assignee: D.describe(parse(t.assignee, {})), due_at: t.due_at, completed_at: t.completed_at })), url: c.url.origin + '/#/processes/' + raw.id };
+}
+route('GET', '/api/v1/runs/:id', async (c, { id }) => ({ run: await runView(c, id) }));
+route('GET', '/api/v1/runs', async (c) => {
+  const q = c.url.searchParams, ref = q.get('reference'), status = q.get('status'), lim = Math.min(200, Number(q.get('limit')) || 50);
+  const where = [], args = [];
+  if (ref) { where.push('v.external_ref = ?'); args.push(ref); }
+  if (status) { where.push('v.status = ?'); args.push(status); }
+  const rows = await all(c.db, `SELECT v.id, v.flow, v.title, v.status, v.outcome, v.external_ref AS reference, v.source, v.created_at, v.finished_at, i.started_by FROM v_instances v JOIN instances i ON i.id = v.id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY v.id DESC LIMIT 500`, ...args);
+  const out = [];
+  for (const r of rows) { if (out.length >= lim) break; if (c.user.is_admin || r.started_by === c.user.id || (await canSeeInstance(c, { id: r.id, started_by: r.started_by }))) { delete r.started_by; out.push(r); } }
+  return { runs: out };
+});
+route('GET', '/api/v1/forms', async (c) => {
+  const D = await c.dir();
+  return (await c.forms()).filter(f => f.status !== 'archived' && (canViewForm(c.user, D, f) || canAddForm(c.user, D, f))).map(f => ({ slug: f.slug, name: f.name, description: f.description || '', canRead: canViewForm(c.user, D, f), canAdd: canAddForm(c.user, D, f), fields: f.fields.filter(x => x.type !== 'heading').map(fieldSpec) }));
+});
+route('GET', '/api/v1/forms/:slug/records', async (c, { slug }) => {
+  const form = (await c.forms()).find(f => f.slug === slug);
+  if (!form) throw new HttpError(404, 'Form not found');
+  const D = await c.dir(), all_ = canViewForm(c.user, D, form), lim = Math.min(1000, Number(c.url.searchParams.get('limit')) || 100);
+  const res = await tabular(c.db, `SELECT * FROM ${qi('form_' + form.slug)} ${all_ ? '' : 'WHERE person_id = ' + Number(c.user.id)} ORDER BY id DESC LIMIT ${lim}`);
+  return { records: res.values.map(r => Object.fromEntries(res.columns.map((k, i) => [k, r[i]]))) };
+});
+route('POST', '/api/v1/forms/:slug/records', async (c, { slug }) => {
+  const form = (await c.forms()).find(f => f.slug === slug);
+  if (!form) throw new HttpError(404, 'Form not found');
+  const D = await c.dir();
+  if (form.status === 'archived') throw new HttpError(409, 'This form is archived');
+  if (!canAddForm(c.user, D, form)) throw new HttpError(403, 'You may not add records to this form');
+  const b = await c.body();
+  const res = await finalizeForm(c, form, b.data, { initiator: D.profile(c.user.id) });
+  if (!res.ok) throw new HttpError(422, 'Please check the data', { errors: res.errors, formErrors: res.formErrors });
+  const rid = await run(c.db, 'INSERT INTO submissions(form_id, person_id, data, created_at) VALUES (?,?,?,?)', form.id, c.user.id, JSON.stringify(res.data), now());
+  return new Response(JSON.stringify({ id: rid, data: res.data }), { status: 201, headers: { 'content-type': 'application/json; charset=utf-8' } });
+});
+route('GET', '/api/v1/ping', async (c) => ({ ok: true, as: c.user.name }));

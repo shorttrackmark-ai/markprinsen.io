@@ -140,7 +140,7 @@
     },
 
     /** Structural and logic checks on a flowchart. formIds: ids of existing forms. */
-    lintFlow(graph, formIds) {
+    lintFlow(graph, formIds, forms) {
       const errs = [], g = graph || { nodes: [], edges: [] };
       const known = formIds ? new Set(formIds.map(Number)) : null;
       const ids = new Set(g.nodes.map(n => n.id));
@@ -161,6 +161,16 @@
         }
         if (n.recordId) { const er = FB.expr.check(n.recordId); if (er) errs.push(`“${n.name}” record id: ${er}`); }
         if (n.type === 'start' && n.title) { const er = FB.expr.check(n.title); if (er) errs.push(`Process title: ${er}`); }
+        if (n.type === 'start' && n.formId && known && !known.has(Number(n.formId))) errs.push('The request form (at Start) no longer exists or is archived.');
+        if (n.type === 'start' && n.publicEnabled) {
+          if (!n.formId) errs.push('A public web form needs a request form: choose one at Start.');
+          const pf = forms && n.formId ? forms.find(f => Number(f.id) === Number(n.formId)) : null;
+          if (pf && pf.fields.some(f => f.type === 'person' || f.type === 'record')) errs.push('A public web form cannot use Person or Record fields (visitors are not signed in).');
+          for (const t of g.nodes) {
+            const a = t.type === 'task' ? (t.assignee || { type: 'initiator' }) : null;
+            if (a && (a.type === 'initiator' || (a.type === 'tags' && (a.sameAs || []).length))) errs.push(`Task “${t.name}” depends on who started the process, but a public web form has no signed-in person: route it to a person or to tags.`);
+          }
+        }
       }
       for (const e of g.edges) {
         if (!ids.has(e.from) || !ids.has(e.to)) errs.push('An arrow points to a removed step.');

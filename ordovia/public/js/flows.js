@@ -215,6 +215,7 @@
         const r = await FB.api.put('/admin/flows/' + flow.id, { name: flow.name, description: flow.description, graph: g, doc: flow.doc, area_id: flow.area_id, owner_id: flow.owner_id, status: flow.status, review_months: flow.review_months });
         dirty = false; $('#flSave').textContent = 'Save'; $('#flVer').textContent = r.version;
         if (r.status !== flow.status) { flow.status = r.status; }
+        const rs = (r.graph.nodes || []).find(n => n.type === 'start'), ls = g.nodes.find(n => n.type === 'start'); if (rs && ls && rs.publicToken !== ls.publicToken) { if (rs.publicToken) ls.publicToken = rs.publicToken; else delete ls.publicToken; }
         $('#flStatus').innerHTML = FB.org.status(flow.status);
         if (r.note) toast(r.note, 'warn'); else if (r.issues.length) toast('Saved, but: ' + r.issues[0], 'warn'); else toast('Flow saved – running processes keep their own version', 'ok');
         drawProps();
@@ -251,6 +252,10 @@
           <div class="row2"><label>Process owner<input data-doc="owner" value="${esc(flow.doc.owner || '')}"></label><label>Scope<input data-doc="scope" value="${esc(flow.doc.scope || '')}"></label></div>
           <label>Records &amp; retention<input data-doc="records" value="${esc(flow.doc.records || '')}"></label>
           <label>Who can start <small class="muted">(tags, empty = everyone)</small>${multiSelect('id="stTags"', FB.tagItems(), (g.nodes.find(n => n.type === 'start') || {}).startTags)}</label>
+          <h4>Input</h4>
+          <label>Request form <small class="muted">(what whoever starts this process fills in – in the app, through the API, or on a public web form)</small><select id="stForm"><option value="">– none –</option>${forms.filter(f => f.status !== 'archived').map(f => `<option value="${f.id}" ${Number((g.nodes.find(n => n.type === 'start') || {}).formId) === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
+          <label class="check"><input type="checkbox" id="stPublic" ${(g.nodes.find(n => n.type === 'start') || {}).publicEnabled ? 'checked' : ''}><span>Public web form: anyone with the link can send this request, without signing in</span></label>
+          ${(g.nodes.find(n => n.type === 'start') || {}).publicToken ? `<div class="link-row"><input readonly class="mono" id="stLink" value="${esc(location.origin + '/#/request/' + g.nodes.find(n => n.type === 'start').publicToken)}"><button type="button" class="btn small" id="stCopy">Copy</button></div><p class="hint">The link works once this process is <b>active</b>. Remove the tick to close the form.</p>` : ''}
           <label>Process title <small class="muted">(formula)</small><input id="stTitle" class="mono" value="${esc((g.nodes.find(n => n.type === 'start') || {}).title || '')}" placeholder='"Leave " & initiator.name'></label>
           <h4>Check</h4>${errs.length ? `<ul class="issues">${errs.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : '<p class="ok-text">✓ This flow is ready to run.</p>'}
           <p class="hint"><b>Task</b>: a person fills a form. <b>Decision</b>: first arrow whose condition is true, otherwise the arrow without condition. <b>Calculate</b>: set variables. <b>Record</b>: create or update a record in any form. <b>Webhook</b>: send data to another system (Teams, Slack, ERP…).</p>`;
@@ -260,6 +265,9 @@
         const s = g.nodes.find(n => n.type === 'start');
         $('#stTags', box).onchange = (e) => { s.startTags = [...e.target.selectedOptions].map(o => Number(o.value)); touch(); };
         $('#stTitle', box).oninput = (e) => { s.title = e.target.value; touch(); };
+        $('#stForm', box).onchange = (e) => { s.formId = e.target.value ? Number(e.target.value) : null; touch(); drawProps(); };
+        $('#stPublic', box).onchange = (e) => { s.publicEnabled = e.target.checked; touch(); if (!s.publicEnabled) delete s.publicToken; drawProps(); if (s.publicEnabled) toast('Save to create the public link', 'ok'); };
+        const cp = $('#stCopy', box); if (cp) cp.onclick = () => { navigator.clipboard.writeText($('#stLink', box).value).then(() => toast('Link copied', 'ok')); };
         return;
       }
       if (sel.kind === 'edge') {

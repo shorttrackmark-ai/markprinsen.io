@@ -136,11 +136,12 @@
     FB.cleanup.forEach(fn => { try { fn(); } catch (e) { /* ignore */ } });
     FB.cleanup = [];
     const main = $('#main');
-    if (!FB.state.user) { document.body.classList.add('logged-out'); FB.pages.login(main); return; }
-    document.body.classList.remove('logged-out');
     const path = (location.hash || '#/').slice(1).split('?')[0] || '/';
     const r = routes.map(x => ({ x, m: x.re.exec(path) })).find(o => o.m);
-    FB.shell(path);
+    const isPublic = !!(r && r.x.opts.public);
+    if (!FB.state.user && !isPublic) { document.body.classList.add('logged-out'); FB.pages.login(main); return; }
+    if (!FB.state.user) document.body.classList.add('logged-out'); else document.body.classList.remove('logged-out');
+    if (FB.state.user) FB.shell(path);
     if (!r) { main.innerHTML = '<div class="page"><h1>Not found</h1></div>'; return; }
     if (r.x.opts.admin && !FB.isAdmin()) { main.innerHTML = '<div class="page"><h1>No access</h1><p>This part is for administrators.</p></div>'; return; }
     const params = {}; r.x.keys.forEach((k, i) => { params[k] = decodeURIComponent(r.m[i + 1]); });
