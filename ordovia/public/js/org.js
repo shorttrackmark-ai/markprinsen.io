@@ -111,7 +111,8 @@
     main.innerHTML = `<div class="page"><div class="page-head"><div><h1>Areas</h1><p class="muted">Areas are how everything is grouped: one per department or domain. Give each an owner. Processes, forms and dashboards each belong to one area.</p></div><div class="actions"><button class="btn primary" id="naBtn">+ New area</button></div></div>
       ${list.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Area</th><th>Owner</th><th>Processes</th><th>Forms</th><th>Dashboards</th><th></th></tr></thead><tbody>
       ${list.map(a => `<tr><td><a href="#/area/${a.id}">${Org.chip(a.id)}</a> <span class="muted small">${esc(a.description || '')}</span></td><td>${esc(a.owner || '–')}</td><td>${a.flows}</td><td>${a.forms}</td><td>${a.dashboards}</td>
-        <td><button class="btn small" data-edit="${a.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state card"><p>No areas yet. Start with your departments, e.g. Finance, HR, Sales, Operations.</p></div>'}</div>`;
+        <td><button class="btn small" data-edit="${a.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state card"><p>No areas yet. Start with your departments, e.g. Finance, HR, Sales, Operations.</p><p><button class="btn primary" id="arStarter">Create starter areas</button></p></div>'}</div>`;
+    const st = $('#arStarter', main); if (st) st.onclick = async () => { await api.post('/admin/areas/starter'); await FB.loadMeta(); FB.render(); };
     const edit = (a) => {
       a = a || { name: '', description: '', color: '#4f46e5', owner_id: null };
       const m = modal(a.id ? 'Edit area' : 'New area', `<form id="arf"><label>Name<input name="name" required value="${esc(a.name)}" placeholder="e.g. Finance"></label>
@@ -139,8 +140,9 @@
     FB.state.health = { counts: h.counts, at: Date.now() };
     main.innerHTML = `<div class="page"><div class="page-head"><div><h1>Health</h1><p class="muted">What needs attention in this workspace – checked just now. Fix the red ones first.</p></div></div>
       <div class="health-counts"><span class="hc e">${h.counts.error} problem${h.counts.error === 1 ? '' : 's'}</span><span class="hc w">${h.counts.warn} warning${h.counts.warn === 1 ? '' : 's'}</span><span class="hc i">${h.counts.info} tip${h.counts.info === 1 ? '' : 's'}</span></div>
-      ${h.items.length ? `<ul class="health">${h.items.map(i => `<li class="lv-${i.level}"><span class="hi">${ICON[i.level]}</span><div><b>${esc(i.title)}</b>${i.detail ? `<div class="muted small">${esc(i.detail)}</div>` : ''}</div>${i.link ? `<a class="btn small" href="${esc(i.link)}">Open</a>` : ''}</li>`).join('')}</ul>`
+      ${h.items.length ? `<ul class="health">${h.items.map(i => `<li class="lv-${i.level}"><span class="hi">${ICON[i.level]}</span><div><b>${esc(i.title)}</b>${i.detail ? `<div class="muted small">${esc(i.detail)}</div>` : ''}</div>${i.entity && areas().length ? `<select class="fix-area" data-entity="${i.entity}" data-id="${i.id}" aria-label="Put in an area"><option value="">Put in area…</option>${areas().map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>` : ''}${i.link ? `<a class="btn small" href="${esc(i.link)}">Open</a>` : ''}</li>`).join('')}</ul>`
         : '<div class="empty-state card"><p>✓ Everything is in order.</p></div>'}</div>`;
+    $$('.fix-area', main).forEach(sel => sel.onchange = async () => { if (!sel.value) return; try { await api.post('/admin/assign-area', { entity: sel.dataset.entity, id: Number(sel.dataset.id), area_id: Number(sel.value) }); await FB.loadMeta(); FB.state.health = null; FB.render(); } catch (e) { toast(e.message, 'error'); } });
     FB.shell((location.hash || '#/').slice(1).split('?')[0]);
   }, { admin: true });
 

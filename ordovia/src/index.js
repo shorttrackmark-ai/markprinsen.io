@@ -792,7 +792,7 @@ route('GET', '/api/admin/audit', async (c) => {
 // ---------------------------------------------------------------- health: what needs attention, in one list
 route('GET', '/api/admin/health', async (c) => {
   const D = await c.dir(), forms = await c.forms(), today = now().slice(0, 10), items = [];
-  const add = (level, kind, title, detail, link) => items.push({ level, kind, title, detail: detail || '', link: link || '' });
+  const add = (level, kind, title, detail, link, fix) => items.push({ level, kind, title, detail: detail || '', link: link || '', ...(fix || {}) });
   const liveForms = forms.filter(f => f.status !== 'archived');
   const flows = await all(c.db, 'SELECT * FROM flows WHERE status != ? ORDER BY name', 'archived');
   const usedForms = new Set();
@@ -812,12 +812,12 @@ route('GET', '/api/admin/health', async (c) => {
     if (f.status === 'active' && !f.owner_id) add('warn', 'ownership', f.name + ' has no owner', 'Every process needs a person who keeps it right', link);
     const due = reviewDueAt(f); if (f.status === 'active' && due && due < today) add('warn', 'review', f.name + ' is due for review', 'Review was due ' + due, '#/handbook/' + f.id);
     if (f.status === 'draft' && f.updated_at && f.updated_at < new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)) add('info', 'draft', f.name + ' has been a draft for over 30 days', 'Finish it or archive it', link);
-    if (f.status === 'active' && !f.area_id) add('info', 'structure', f.name + ' is in no area', '', link);
+    if (f.status === 'active' && !f.area_id) add('info', 'structure', f.name + ' is in no area', '', link, { entity: 'flow', id: f.id });
   }
   for (const f of liveForms) {
     const n = (await first(c.db, 'SELECT count(*) AS n FROM submissions WHERE form_id = ?', f.id)).n;
     if (!usedForms.has(f.id) && !n && f.updated_at && f.updated_at < new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10)) add('info', 'unused', f.name + ' is not used anywhere', 'No process uses it and it has no records – archive it?', '#/admin/forms/' + f.id);
-    if (!f.area_id) add('info', 'structure', f.name + ' (form) is in no area', '', '#/admin/forms/' + f.id);
+    if (!f.area_id) add('info', 'structure', f.name + ' (form) is in no area', '', '#/admin/forms/' + f.id, { entity: 'form', id: f.id });
   }
   const stuck = await all(c.db, "SELECT id, title FROM instances WHERE status = 'stuck' LIMIT 20");
   stuck.forEach(i => add('error', 'run', 'Process run “' + i.title + '” is stuck', 'No arrow matched – fix the flow, then delete the run', '#/processes/' + i.id));
@@ -827,8 +827,7 @@ route('GET', '/api/admin/health', async (c) => {
   old.forEach(t => add('warn', 'stale', 'Open for over 30 days: ' + t.name + ' – ' + t.title, 'Opened ' + t.created_at, '#/task/' + t.id));
   const dashes = await all(c.db, "SELECT id, name, widgets FROM dashboards WHERE status != 'archived' LIMIT 20");
   for (const d of dashes) for (const w of parse(d.widgets, [])) { const r = await runWidget(c, w); if (r.error) add('warn', 'dashboard', 'Dashboard “' + d.name + '”: widget “' + (w.title || w.id) + '” fails', r.error.slice(0, 160), '#/dashboards/' + d.id); }
-  const noArea = await first(c.db, "SELECT count(*) AS n FROM dashboards WHERE area_id IS NULL AND status != 'archived'");
-  if (noArea.n) add('info', 'structure', noArea.n + ' dashboard' + (noArea.n > 1 ? 's are' : ' is') + ' in no area', '', '#/dashboards');
+  for (const d of await all(c.db, "SELECT id, name FROM dashboards WHERE area_id IS NULL AND status != 'archived' LIMIT 20")) add('info', 'structure', d.name + ' (dashboard) is in no area', '', '#/dashboards/' + d.id, { entity: 'dashboard', id: d.id });
   const admins = [...D.persons.values()].filter(p => p.is_admin && p.active).length;
   if (admins < 2) add('info', 'people', 'Only one administrator', 'Make a second person administrator so nobody is locked out', '#/admin/people');
   const order = { error: 0, warn: 1, info: 2 };
@@ -1004,3 +1003,25 @@ route('POST', '/api/demo/reset', async (c) => {
   await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now()));
   return { ok: true };
 }, { public: true });
+
+route('POST', '/api/admin/assign-area', async (c) => {
+  const b = await c.body();
+  const table = { flow: 'flows', form: 'forms', dashboard: 'dashboards' }[b.entity];
+  if (!table) throw new HttpError(400, 'Unknown item type');
+  const row = await first(c.db, 'SELECT id, name FROM ' + table + ' WHERE id = ?', Number(b.id));
+  if (!row) throw new HttpError(404, 'Item not found');
+  const aid = await areaOf(c, b.area_id);
+  await run(c.db, 'UPDATE ' + table + ' SET area_id = ? WHERE id = ?', aid, row.id);
+  if (b.entity === 'form') c._forms = null;
+  c.note(row.name, 'Area: ' + (aid ? (await first(c.db, 'SELECT name FROM areas WHERE id = ?', aid)).name : 'none'));
+  return { ok: true };
+}, { admin: true });
+
+// first-time help: the usual departments, so the workspace starts with a structure (only when there are no areas yet)
+route('POST', '/api/admin/areas/starter', async (c) => {
+  if ((await first(c.db, 'SELECT count(*) AS n FROM areas')).n) throw new HttpError(409, 'There are areas already');
+  const starter = [['Finance', '#0891b2'], ['People & HR', '#7c3aed'], ['Sales', '#ea580c'], ['Operations', '#16a34a'], ['IT', '#64748b']];
+  await c.db.batch(starter.map(([n, col]) => c.db.prepare('INSERT INTO areas(name, description, color, created_at) VALUES (?,?,?,?)').bind(n, '', col, now())));
+  c.note('Starter areas', starter.map(x => x[0]).join(', '));
+  return { ok: true };
+}, { admin: true });

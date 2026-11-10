@@ -24,6 +24,8 @@ r = await get('/api/areas'); ok(r.data.length === 3 && r.data[0].flows !== undef
 r = await post('/api/admin/areas', { name: 'Sales', description: 'Offers and orders' }); ok(r.status === 200 && r.data.id, 'create area', r); const salesId = r.data.id;
 r = await post('/api/admin/areas', { name: 'sales' }); ok(r.status === 409, 'area names are unique (case-insensitive)', r);
 r = await put('/api/admin/areas/' + salesId, { name: 'Sales & Marketing', description: 'x' }); ok(r.status === 200, 'rename area');
+r = await post('/api/admin/assign-area', { entity: 'form', id: forms[0].id, area_id: salesId }); ok(r.status === 200, 'assign a form to an area'); r = await get('/api/meta'); ok(r.data.forms.find(f => f.id === forms[0].id).area_id === salesId, 'the form is in its new area');
+r = await post('/api/admin/areas/starter'); ok(r.status === 409, 'starter areas only on an empty workspace');
 
 console.log('handbook, home');
 r = await get('/api/handbook'); ok(r.data.length === 3 && r.data[0].owner && r.data[0].reviewDue, 'handbook has owner and review date', r.data[0]);
