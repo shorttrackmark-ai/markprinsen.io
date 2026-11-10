@@ -7,6 +7,7 @@
   const api = FB.api;
 
   // ---------------- shell ----------------
+  const healthBadge = () => { const h = FB.state.health; return h && (h.counts.error + h.counts.warn) ? String(h.counts.error + h.counts.warn) : ''; };
   FB.shell = function (path) {
     const u = FB.state.user, m = FB.state.meta || {};
     const link = (href, icon, label, prefix, badge) => {
@@ -15,19 +16,26 @@
     };
     $('#nav').innerHTML = `<div class="nav-group">
       ${link('#/', '▤', 'My tasks', null, m.openTasks)}
-      ${link('#/processes', '⟳', 'Processes', '/processes')}
+      ${link('#/areas', '◫', 'Areas', '/area')}
+      ${link('#/processes', '⟳', 'Runs', '/processes')}
       ${link('#/handbook', '❖', 'Handbook', '/handbook')}
       ${link('#/data', '▦', 'Data', '/data')}
       ${link('#/dashboards', '▣', 'Dashboards', '/dashboards')}</div>
       ${FB.isAdmin() ? `<div class="nav-title">Build</div><div class="nav-group">
       ${link('#/admin/flows', '⇄', 'Flows', '/admin/flows')}
       ${link('#/admin/forms', '☰', 'Forms', '/admin/forms')}
-      ${link('#/admin/people', '☺', 'People &amp; tags')}
+      ${link('#/admin/areas', '◫', 'Manage areas')}
+      ${link('#/admin/people', '☺', 'People &amp; tags')}</div>
+      <div class="nav-title">Control</div><div class="nav-group">
+      ${link('#/admin/health', '✚', 'Health', '/admin/health', healthBadge())}
+      ${link('#/admin/activity', '☷', 'Activity', '/admin/activity')}
       ${link('#/admin/sql', '⌘', 'SQL console')}
       ${link('#/admin/settings', '⚙', 'Settings')}</div>` : ''}`;
+    if (FB.isAdmin() && FB.loadHealthCount) FB.loadHealthCount();
     $('#who').innerHTML = `<span class="avatar">${esc(u.name.split(' ').map(s => s[0]).slice(0, 2).join(''))}</span><span class="who-name">${esc(u.name)}</span>`;
     $('#brandName').textContent = FB.state.settings.company && FB.state.settings.company !== 'Ordovia' ? FB.state.settings.company : 'Ordovia';
   };
+  FB.refreshBadge = () => refreshBadge();
   const refreshBadge = async () => { try { await FB.loadMeta(); FB.shell((location.hash || '#/').slice(1).split('?')[0] || '/'); } catch (e) { /* ignore */ } };
 
   // ---------------- setup & login ----------------
@@ -78,7 +86,7 @@
     const u = FB.state.user;
     const h = await api.get('/home');
     main.innerHTML = `<div class="page"><div class="page-head"><h1>Hi ${esc(u.name.split(' ')[0])}</h1></div>
-      <section><h2>Start a process</h2><div class="start-grid">${h.flows.map(f => `<button class="card start-card" data-start="${f.id}"><b>${esc(f.name)}</b><span class="muted small">${esc(f.description || '')}</span></button>`).join('') || '<p class="muted">No processes available for you.</p>'}</div></section>
+      <section><h2>Start a process</h2>${FB.org.group(h.flows, f => f.area_id).map(g => `<div class="start-area">${g.area ? `<div class="start-area-head"><a href="#/area/${g.area.id}">${FB.org.chip(g.area.id)}</a></div>` : ''}<div class="start-grid">${g.items.map(f => `<button class="card start-card" data-start="${f.id}"><b>${esc(f.name)} ${FB.org.status(f.status)}</b><span class="muted small">${esc(f.description || '')}</span></button>`).join('')}</div></div>`).join('') || '<p class="muted">No processes available for you.</p>'}</section>
       <section><h2>Open tasks <span class="count">${h.tasks.length}</span></h2>
       ${h.tasks.length ? `<div class="task-list">${h.tasks.map(t => `<a class="card task-row ${t.overdue ? 'overdue' : ''}" href="#/task/${t.id}">
         <div><b>${esc(t.name)}</b><div class="muted small">${esc(t.process)} · ${esc(t.flow)}</div></div>
@@ -148,10 +156,17 @@
   // ---------------- handbook ----------------
   FB.route('/handbook', async (main) => {
     const list = await api.get('/handbook');
+    const st = { q: '', area: '', status: 'live' };
     main.innerHTML = `<div class="page"><div class="page-head"><div><h1>Process handbook</h1><p class="muted">How we work: every process with its purpose, owner, steps and work instructions – always in sync with what actually runs.</p></div></div>
-      <div class="cards">${list.map(f => `<a class="card link-card" href="#/handbook/${f.id}"><h3>${esc(f.name)}</h3>
+      <div id="hbFilters"></div><div id="hbList"></div></div>`;
+    const draw = () => {
+      const shown = list.filter(f => FB.org.match(f, st, [f.name, f.description, f.doc.purpose, f.owner].join(' ')));
+      $('#hbList', main).innerHTML = FB.org.groupedCards(shown, f => f.area_id, f => `<a class="card link-card" href="#/handbook/${f.id}"><h3>${esc(f.name)} ${FB.org.status(f.status)}</h3>
         <p class="small">${esc(f.doc.purpose || f.description || '')}</p>
-        <p class="muted small">${f.doc.owner ? `Owner: ${esc(f.doc.owner)} · ` : ''}${f.steps} task step${f.steps === 1 ? '' : 's'} · v${f.version}</p></a>`).join('') || '<p class="muted">No processes yet.</p>'}</div></div>`;
+        <p class="muted small">${f.owner ? `Owner: ${esc(f.owner)} · ` : ''}${f.steps} task step${f.steps === 1 ? '' : 's'} · v${f.version}${f.overdue ? ' · <span class="warn-text">review due</span>' : ''}</p></a>`, 'No processes match.');
+    };
+    FB.org.filters($('#hbFilters', main), st, { status: FB.isAdmin(), placeholder: 'Search processes…' }, draw);
+    draw();
   });
 
   FB.route('/handbook/:id', async (main, { id }) => {
@@ -160,11 +175,12 @@
     const steps = order.map(nid => h.steps.find(s => s.id === nid)).filter(s => s && s.type !== 'start');
     const typeLabel = { task: 'Task', decision: 'Decision', action: 'Calculation', record: 'Record', webhook: 'Integration', end: 'End' };
     main.innerHTML = `<div class="page handbook"><div class="page-head"><div><a class="crumb" href="#/handbook">← Handbook</a><h1>${esc(h.name)}</h1>
-      <p class="muted">Version ${h.version} · last changed ${esc(fmtDate(h.updated_at))}${h.stats && h.stats.runs ? ` · ${h.stats.runs} runs, avg. ${h.stats.avg_hours ?? '–'} h` : ''}</p></div>
-      <div class="actions"><button class="btn" onclick="window.print()">Print</button>${FB.isAdmin() ? `<a class="btn" href="#/admin/flows/${h.id}">Edit flow</a>` : ''}</div></div>
+      <p class="muted">${h.area ? `<a href="#/area/${h.area_id}">${esc(h.area)}</a> · ` : ''}Version ${h.version} · last changed ${esc(fmtDate(h.updated_at))}${h.stats && h.stats.runs ? ` · ${h.stats.runs} runs, avg. ${h.stats.avg_hours ?? '–'} h` : ''} ${FB.org.status(h.status)}</p>
+      ${h.reviewDue ? `<p class="small ${h.overdue ? 'warn-text' : 'muted'}">${h.overdue ? '⚠ Review was due' : 'Next review'} ${esc(h.reviewDue)}${h.reviewedAt ? ` · last reviewed ${esc(fmtDate(h.reviewedAt).slice(0, 10))}` : ''}</p>` : ''}</div>
+      <div class="actions">${h.canReview ? '<button class="btn" id="hbReview">Mark as reviewed</button>' : ''}<button class="btn" onclick="window.print()">Print</button>${FB.isAdmin() ? `<a class="btn" href="#/admin/flows/${h.id}">Edit flow</a>` : ''}</div></div>
       <div class="doc-grid">
         <div class="card"><h4>Purpose</h4><p>${richText(h.doc.purpose || h.description || '–')}</p></div>
-        <div class="card"><h4>Owner</h4><p>${esc(h.doc.owner || '–')}</p><h4>Scope</h4><p>${esc(h.doc.scope || '–')}</p></div>
+        <div class="card"><h4>Owner</h4><p>${esc(h.owner || h.doc.owner || '–')}</p><h4>Scope</h4><p>${esc(h.doc.scope || '–')}</p></div>
         <div class="card"><h4>Records</h4><p>${esc(h.doc.records || '–')}</p></div></div>
       <div class="card mini-flow">${FB.flows.static(h.graph)}</div>
       <h2>Steps</h2><ol class="steps">${steps.map(s => `<li class="step step-${s.type}"><div class="step-head"><b>${esc(s.name)}</b><span class="tag">${typeLabel[s.type] || s.type}</span></div>
@@ -172,6 +188,8 @@
         ${s.form ? `<div class="small"><span class="muted">Form:</span> ${esc(s.form)}</div>` : ''}
         ${s.instructions ? `<div class="step-instr">${richText(s.instructions)}</div>` : ''}
         ${s.next.length > 1 ? `<div class="small muted">${s.next.map(n => `${esc(n.when || 'otherwise')} → ${esc(n.to)}`).join(' · ')}</div>` : ''}</li>`).join('')}</ol></div>`;
+    const rv = $('#hbReview', main);
+    if (rv) rv.onclick = async () => { try { await api.post(`/flows/${h.id}/review`); toast('Marked as reviewed', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); } };
   });
   /** Order steps roughly in flow order (breadth-first from Start). */
   function orderSteps(g) {
@@ -185,10 +203,16 @@
   FB.route('/data', async (main) => {
     await FB.loadMeta();
     const forms = FB.state.meta.forms;
-    main.innerHTML = `<div class="page"><div class="page-head"><h1>Data</h1></div>
-      <div class="cards">${forms.map(f => `<a class="card link-card" href="#/data/${f.id}"><h3>${esc(f.name)}</h3>
+    const st = { q: '', area: '', status: 'live' };
+    main.innerHTML = `<div class="page"><div class="page-head"><h1>Data</h1></div><div id="dtFilters"></div><div id="dtList"></div></div>`;
+    const draw = () => {
+      const shown = forms.filter(f => FB.org.match(f, st, f.name + ' ' + (f.description || '')));
+      $('#dtList', main).innerHTML = FB.org.groupedCards(shown, f => f.area_id, f => `<a class="card link-card" href="#/data/${f.id}"><h3>${esc(f.name)} ${FB.org.status(f.status)}</h3>
         ${f.description ? `<p class="small">${esc(f.description)}</p>` : ''}
-        <p class="muted small">${f.canView ? 'All records' : 'Your records'}${f.canAdd ? ' · you can add records' : ''}</p></a>`).join('') || '<p class="muted">No forms yet.</p>'}</div></div>`;
+        <p class="muted small">${f.canView ? 'All records' : 'Your records'}${f.canAdd ? ' · you can add records' : ''}</p></a>`, 'No forms match.');
+    };
+    FB.org.filters($('#dtFilters', main), st, { status: FB.isAdmin(), placeholder: 'Search data…' }, draw);
+    draw();
   });
 
   FB.route('/data/:id', async (main, { id }) => {
@@ -235,6 +259,7 @@
       };
     }
     draw();
+    const openId = Number(FB.query().get('open')); if (openId) showRecord(openId).catch(() => {});
   });
 
   // ---------------- dashboards ----------------
@@ -244,22 +269,46 @@
   // ---------------- admin: forms ----------------
   FB.route('/admin/forms', async (main) => {
     const forms = await api.get('/admin/forms');
-    main.innerHTML = `<div class="page"><div class="page-head"><h1>Forms</h1><div class="actions"><button class="btn primary" id="nf">+ New form</button></div></div>
-      ${table({ columns: ['Form', 'Fields', 'Records', 'SQL view', 'Updated'], values: forms.map(f => [f.name, f.fields, f.records, 'form_' + f.slug, fmtDate(f.updated_at)]) }, { rowAttr: (r, i) => `data-href="#/admin/forms/${forms[i].id}" class="clickable"` })}</div>`;
-    clickableRows(main);
-    $('#nf', main).onclick = async () => { const n = prompt('Form name', 'New form'); if (n && n.trim()) { const r = await api.post('/admin/forms', { name: n.trim() }); await FB.loadMeta(); FB.go('#/admin/forms/' + r.id); } };
+    const st = { q: '', area: '', status: 'live' };
+    main.innerHTML = `<div class="page page-wide"><div class="page-head"><h1>Forms</h1><div class="actions"><button class="btn primary" id="nf">+ New form</button></div></div><div id="fmFilters"></div><div id="fmList"></div></div>`;
+    const draw = () => {
+      const shown = forms.filter(f => FB.org.match(f, st, f.name + ' ' + f.slug + ' ' + (f.description || '')));
+      const rows = FB.org.group(shown, f => f.area_id).flatMap(g => g.items);
+      $('#fmList', main).innerHTML = table({ columns: ['Form', 'Area', 'Status', 'Fields', 'Records', 'Used in', 'SQL view', 'Updated'], values: rows.map(f => [f.name, '', f.status, f.fields, f.records, f.usedIn ? f.usedIn + ' process' + (f.usedIn > 1 ? 'es' : '') : '–', 'form_' + f.slug, fmtDate(f.updated_at)]) },
+        { rowAttr: (r, i) => `data-href="#/admin/forms/${rows[i].id}" class="clickable"` });
+      $$('#fmList tbody tr', main).forEach((tr, i) => { const tds = tr.children; if (tds[1]) tds[1].innerHTML = FB.org.chip(rows[i].area_id) || '<span class="muted">–</span>'; if (tds[2]) tds[2].innerHTML = FB.org.status(rows[i].status) || 'active'; });
+      clickableRows(main);
+    };
+    FB.org.filters($('#fmFilters', main), st, { status: true, placeholder: 'Search forms…' }, draw);
+    draw();
+    $('#nf', main).onclick = async () => { const n = prompt('Form name', 'New form'); if (n && n.trim()) { const r = await api.post('/admin/forms', { name: n.trim(), area_id: st.area && st.area !== 'none' ? Number(st.area) : null }); await FB.loadMeta(); FB.go('#/admin/forms/' + r.id); } };
   }, { admin: true });
   FB.route('/admin/forms/:id', (main, { id }) => FB.forms.builder(main, Number(id)), { admin: true });
 
   // ---------------- admin: flows ----------------
   FB.route('/admin/flows', async (main) => {
     const flows = await api.get('/admin/flows');
-    main.innerHTML = `<div class="page"><div class="page-head"><h1>Flows</h1><div class="actions"><button class="btn primary" id="nf">+ New flow</button></div></div>
-      <div class="cards">${flows.map(f => `<div class="card link-card"><a href="#/admin/flows/${f.id}"><h3>${esc(f.name)}</h3></a><p class="muted small">${esc(f.description || '')}</p>
-        <p class="small">${f.steps} steps · v${f.version} · ${f.runs} runs (${f.running || 0} running) ${f.issues ? `<span class="warn-text">· ${f.issues} issue(s)</span>` : '<span class="ok-text">· ready</span>'}</p>
-        <div class="row-actions"><a class="btn small" href="#/admin/flows/${f.id}">Design</a><a class="btn small" href="#/handbook/${f.id}">Handbook</a><button class="btn small danger ghost" data-del="${f.id}">Delete</button></div></div>`).join('') || '<p class="muted">No flows yet.</p>'}</div></div>`;
-    $('#nf', main).onclick = async () => { const n = prompt('Flow name', 'New process'); if (n && n.trim()) { const r = await api.post('/admin/flows', { name: n.trim() }); FB.go('#/admin/flows/' + r.id); } };
-    $$('[data-del]', main).forEach(b => b.onclick = async () => { if (confirm('Delete this flow and all its process runs?')) { await api.del('/admin/flows/' + b.dataset.del); FB.render(); } });
+    const st = { q: '', area: '', status: 'live' };
+    main.innerHTML = `<div class="page"><div class="page-head"><h1>Flows</h1><div class="actions"><button class="btn primary" id="nf">+ New flow</button></div></div><div id="flFilters"></div><div id="flList"></div></div>`;
+    const card = (f) => `<div class="card link-card"><a href="#/admin/flows/${f.id}"><h3>${esc(f.name)} ${FB.org.status(f.status)}</h3></a><p class="muted small">${esc(f.description || '')}</p>
+        <p class="small">${f.steps} steps · v${f.version} · ${f.runs} runs (${f.running || 0} running) ${f.issues ? `<span class="warn-text">· ${f.issues} issue(s)</span>` : '<span class="ok-text">· ready</span>'}${f.overdue ? ' · <span class="warn-text">review due</span>' : ''}</p>
+        <p class="muted small">${f.owner_id ? 'Owner: ' + esc(FB.org.personName(f.owner_id)) : 'No owner'}</p>
+        <div class="row-actions"><a class="btn small" href="#/admin/flows/${f.id}">Design</a><a class="btn small" href="#/handbook/${f.id}">Handbook</a>
+        ${f.status === 'archived' ? `<button class="btn small" data-restore="${f.id}">Restore</button><button class="btn small danger ghost" data-del="${f.id}">Delete…</button>` : `<button class="btn small ghost" data-archive="${f.id}">Archive</button>`}</div></div>`;
+    const setStatus = async (id, status) => {
+      const full = await api.get('/admin/flows/' + id);
+      try { await api.put('/admin/flows/' + id, { name: full.name, description: full.description, graph: full.graph, doc: full.doc, status }); toast(status === 'archived' ? 'Archived' : 'Restored as draft', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); }
+    };
+    const draw = () => {
+      const shown = flows.filter(f => FB.org.match(f, st, f.name + ' ' + (f.description || '')));
+      $('#flList', main).innerHTML = FB.org.groupedCards(shown, f => f.area_id, card, 'No flows match.');
+      $$('[data-archive]', main).forEach(b => b.onclick = () => { if (confirm('Archive this process? It disappears for everyone; running processes continue. You can restore it later.')) setStatus(b.dataset.archive, 'archived'); });
+      $$('[data-restore]', main).forEach(b => b.onclick = () => setStatus(b.dataset.restore, 'draft'));
+      $$('[data-del]', main).forEach(b => b.onclick = async () => { if (confirm('Delete this archived flow and ALL its process runs for good? This cannot be undone.')) { try { await api.del('/admin/flows/' + b.dataset.del); FB.render(); } catch (e) { toast(e.message, 'error'); } } });
+    };
+    FB.org.filters($('#flFilters', main), st, { status: true, placeholder: 'Search flows…' }, draw);
+    draw();
+    $('#nf', main).onclick = async () => { const n = prompt('Flow name', 'New process'); if (n && n.trim()) { const r = await api.post('/admin/flows', { name: n.trim(), area_id: st.area && st.area !== 'none' ? Number(st.area) : null }); FB.go('#/admin/flows/' + r.id); } };
   }, { admin: true });
   FB.route('/admin/flows/:id', (main, { id }) => FB.flows.designer(main, Number(id)), { admin: true });
 
@@ -364,6 +413,8 @@
   }
   $('#logout').onclick = async () => { await api.post('/logout').catch(() => {}); FB.state.user = null; FB.state.meta = null; location.hash = '#/'; FB.render(); };
   $('#menuBtn').onclick = () => document.body.classList.toggle('nav-open');
+  $('#searchForm').onsubmit = (e) => { e.preventDefault(); const q = $('#searchBox').value.trim(); if (q.length >= 2) location.hash = '#/search?q=' + encodeURIComponent(q); };
+  document.addEventListener('keydown', (e) => { if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '') && FB.state.user) { e.preventDefault(); $('#searchBox').focus(); } });
   window.addEventListener('hashchange', FB.render);
   document.addEventListener('DOMContentLoaded', boot);
 })();

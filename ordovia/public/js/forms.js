@@ -172,7 +172,7 @@
   }
 
   Forms.builder = async function (main, formId) {
-    const { form, others, usedIn } = await FB.api.get('/admin/forms/' + formId);
+    const { form, others, usedIn, usedByForms, usedInDash } = await FB.api.get('/admin/forms/' + formId);
     form.checks = form.checks || [];
     form.access = form.access || {};
     let sel = form.fields.length ? 0 : -1, dirty = false, tab = 'fields';
@@ -182,10 +182,11 @@
       <div class="page-head">
         <div><a href="#/admin/forms" class="crumb">← Forms</a><input class="title-input" id="fName" value="${esc(form.name)}" aria-label="Form name"></div>
         <div class="actions"><span class="muted small">SQL view <code>form_${esc(form.slug)}</code></span>
-          <button class="btn danger ghost" id="fDel">Delete</button><a class="btn" href="#/data/${form.id}">Data</a><button class="btn primary" id="fSave">Save</button></div>
+          ${FB.org.status(form.status)}<button class="btn ghost" id="fArchive">${form.status === 'archived' ? 'Restore' : 'Archive'}</button><button class="btn danger ghost" id="fDel" ${form.status === 'archived' ? '' : 'hidden'}>Delete…</button><a class="btn" href="#/data/${form.id}">Data</a><button class="btn primary" id="fSave">Save</button></div>
       </div>
       <input class="desc-input" id="fDesc" placeholder="Description (optional)" value="${esc(form.description || '')}">
-      ${usedIn.length ? `<p class="muted small">Used in: ${usedIn.map(esc).join(', ')}</p>` : ''}
+      <div id="fOrg"></div>
+      ${(usedIn.length || usedByForms.length || usedInDash.length) ? `<p class="muted small">Used in: ${[...usedIn.map(x => `<a href="#/admin/flows/${x.id}">${esc(x.name)}</a>${x.status === 'archived' ? ' (archived)' : ''}`), ...usedByForms.map(x => `form <a href="#/admin/forms/${x.id}">${esc(x.name)}</a>`), ...usedInDash.map(x => `dashboard <a href="#/dashboards/${x.id}">${esc(x.name)}</a>`)].join(' · ')}</p>` : '<p class="muted small">Not used anywhere yet.</p>'}
       <div class="seg tabs"><button data-tab="fields" class="on">Fields</button><button data-tab="checks">Logic checks</button><button data-tab="access">Access</button></div>
       <div id="fBody"></div></div>`;
 
@@ -193,8 +194,14 @@
     $('#fName').oninput = (e) => { form.name = e.target.value; touch(); };
     $('#fDesc').oninput = (e) => { form.description = e.target.value; touch(); };
     $('#fSave').onclick = save;
+    FB.org.bar($('#fOrg'), form, {}, touch);
+    $('#fArchive').onclick = async () => {
+      form.status = form.status === 'archived' ? 'active' : 'archived';
+      if (form.status === 'archived' && !confirm('Archive this form? Nobody can add records to it any more; the data stays and can be restored.')) { form.status = 'active'; return; }
+      await save(); FB.render();
+    };
     $('#fDel').onclick = async () => {
-      if (!confirm(`Delete form “${form.name}” and all its records?`)) return;
+      if (!confirm(`Delete form “${form.name}” and ALL its records for good? This cannot be undone.`)) return;
       try { await FB.api.del('/admin/forms/' + form.id); await FB.loadMeta(); FB.go('#/admin/forms'); } catch (e) { toast(e.message, 'error'); }
     };
     $$('[data-tab]', main).forEach(b => b.onclick = () => { tab = b.dataset.tab; $$('[data-tab]', main).forEach(x => x.classList.toggle('on', x === b)); drawBody(); });
@@ -208,7 +215,7 @@
       const problems = FB.logic.lint(form);
       if (problems.length) { toast(problems[0], 'error'); return; }
       try {
-        await FB.api.put('/admin/forms/' + form.id, { name: form.name, description: form.description, fields: form.fields, checks: form.checks, access: form.access });
+        await FB.api.put('/admin/forms/' + form.id, { name: form.name, description: form.description, fields: form.fields, checks: form.checks, access: form.access, area_id: form.area_id, owner_id: form.owner_id, status: form.status });
         dirty = false; $('#fSave').textContent = 'Save'; toast('Form saved', 'ok'); FB.loadMeta();
       } catch (e) { toast(e.message, 'error'); }
     }

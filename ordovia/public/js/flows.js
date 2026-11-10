@@ -75,14 +75,14 @@
     const view = { x: 0, y: 0, k: 1 };
     const meta = FB.state.meta;
     const forms = meta.forms;
-    const formIds = forms.map(f => f.id);
+    const formIds = forms.filter(f => f.status !== 'archived').map(f => f.id);
 
     main.innerHTML = `<div class="page page-full">
       <div class="page-head">
-        <div><a href="#/admin/flows" class="crumb">← Flows · version <span id="flVer">${flow.version}</span></a><input class="title-input" id="flName" value="${esc(flow.name)}" aria-label="Flow name"></div>
+        <div><a href="#/admin/flows" class="crumb">← Flows · version <span id="flVer">${flow.version}</span> <span id="flStatus">${FB.org.status(flow.status)}</span></a><input class="title-input" id="flName" value="${esc(flow.name)}" aria-label="Flow name"></div>
         <div class="actions">
           ${Object.entries(NODE_TYPES).filter(([k]) => k !== 'start').map(([k, t]) => `<button class="btn small node-btn nb-${k}" data-add="${k}">+ ${t.label.replace(' / update', '/upd.')}</button>`).join('')}
-          <button class="btn small" id="flFit">Fit</button><a class="btn small" href="#/handbook/${flow.id}">Handbook</a>
+          <button class="btn small" id="flFit">Fit</button><button class="btn small" id="flHist">History</button><a class="btn small" href="#/handbook/${flow.id}">Handbook</a>
           <button class="btn primary" id="flSave">Save</button>
         </div>
       </div>
@@ -102,6 +102,7 @@
     $('#flName').oninput = (e) => { flow.name = e.target.value; touch(); };
     $('#flSave').onclick = save;
     $('#flFit').onclick = fit;
+    $('#flHist').onclick = history;
     $$('[data-add]', main).forEach(b => b.onclick = () => {
       const t = b.dataset.add, r = svg.getBoundingClientRect(), id = uid('n');
       const names = { task: 'New task', decision: 'Condition?', action: 'Calculate', record: 'Save record', webhook: 'Notify system', end: 'End' };
@@ -211,11 +212,23 @@
 
     async function save() {
       try {
-        const r = await FB.api.put('/admin/flows/' + flow.id, { name: flow.name, description: flow.description, graph: g, doc: flow.doc });
+        const r = await FB.api.put('/admin/flows/' + flow.id, { name: flow.name, description: flow.description, graph: g, doc: flow.doc, area_id: flow.area_id, owner_id: flow.owner_id, status: flow.status, review_months: flow.review_months });
         dirty = false; $('#flSave').textContent = 'Save'; $('#flVer').textContent = r.version;
-        if (r.issues.length) toast('Saved, but: ' + r.issues[0], 'warn'); else toast('Flow saved – running processes keep their own version', 'ok');
+        if (r.status !== flow.status) { flow.status = r.status; }
+        $('#flStatus').innerHTML = FB.org.status(flow.status);
+        if (r.note) toast(r.note, 'warn'); else if (r.issues.length) toast('Saved, but: ' + r.issues[0], 'warn'); else toast('Flow saved – running processes keep their own version', 'ok');
         drawProps();
       } catch (e) { toast(e.message, 'error'); }
+    }
+
+    // ---- history: earlier versions, to look at or restore ----
+    async function history() {
+      const list = await FB.api.get('/admin/flows/' + flow.id + '/versions');
+      const m = FB.ui.modal('Version history', `<p class="muted small">Every saved change of the flow. Restoring makes that version the new current one (running processes keep theirs).</p><div class="table-wrap"><table class="grid"><thead><tr><th>Version</th><th>Saved</th><th>By</th><th>Steps</th><th></th></tr></thead><tbody>${list.map((v, i) => `<tr><td>v${v.version}${i === 0 ? ' <span class="muted">(current)</span>' : ''}</td><td>${esc(FB.ui.fmtDate(v.saved_at))}</td><td>${esc(v.who || '–')}</td><td>${v.steps}</td><td>${i === 0 ? '' : `<button class="btn small" data-restore="${v.id}">Restore</button>`}</td></tr>`).join('')}</tbody></table></div>`, { wide: true });
+      $$('[data-restore]', m.root).forEach(b => b.onclick = async () => {
+        if (dirty && !confirm('You have unsaved changes; they will be lost. Restore anyway?')) return;
+        try { await FB.api.post('/admin/flows/' + flow.id + '/restore', { versionId: Number(b.dataset.restore) }); dirty = false; m.close(); toast('Version restored', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); }
+      });
     }
 
     // ---- properties panel ----
@@ -232,7 +245,7 @@
       const box = $('#flProps');
       if (!sel) {
         const errs = FB.logic.lintFlow(g, formIds);
-        box.innerHTML = `<h4>Process handbook</h4>
+        box.innerHTML = `<h4>Organise</h4><div id="flOrg"></div><h4>Process handbook</h4>
           <label>Description<textarea data-d="description" rows="2">${esc(flow.description || '')}</textarea></label>
           <label>Purpose<textarea data-doc="purpose" rows="2">${esc(flow.doc.purpose || '')}</textarea></label>
           <div class="row2"><label>Process owner<input data-doc="owner" value="${esc(flow.doc.owner || '')}"></label><label>Scope<input data-doc="scope" value="${esc(flow.doc.scope || '')}"></label></div>
@@ -241,6 +254,7 @@
           <label>Process title <small class="muted">(formula)</small><input id="stTitle" class="mono" value="${esc((g.nodes.find(n => n.type === 'start') || {}).title || '')}" placeholder='"Leave " & initiator.name'></label>
           <h4>Check</h4>${errs.length ? `<ul class="issues">${errs.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : '<p class="ok-text">✓ This flow is ready to run.</p>'}
           <p class="hint"><b>Task</b>: a person fills a form. <b>Decision</b>: first arrow whose condition is true, otherwise the arrow without condition. <b>Calculate</b>: set variables. <b>Record</b>: create or update a record in any form. <b>Webhook</b>: send data to another system (Teams, Slack, ERP…).</p>`;
+        FB.org.bar($('#flOrg', box), flow, { review: true }, touch);
         $$('[data-d]', box).forEach(i => i.oninput = () => { flow.description = i.value; touch(); });
         $$('[data-doc]', box).forEach(i => i.oninput = () => { flow.doc[i.dataset.doc] = i.value; touch(); });
         const s = g.nodes.find(n => n.type === 'start');

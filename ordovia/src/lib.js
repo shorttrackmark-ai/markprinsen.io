@@ -173,3 +173,20 @@ export async function tabular(db, sql) {
   if (!hide.length) return { columns, values };
   return { columns: columns.filter((_, i) => !hide.includes(i)), values: values.map(r => r.filter((_, i) => !hide.includes(i))) };
 }
+
+// ---------- structure: status, review cycle, search ----------
+export const STATUSES = ['draft', 'active', 'archived'];
+export const cleanStatus = (v, fallback) => (STATUSES.includes(v) ? v : fallback);
+/** When a process must be reviewed again: the last review (or last change) plus review_months. null = never due. */
+export function reviewDueAt(flow) {
+  const months = Number(flow.review_months);
+  if (!months || months < 1) return null;
+  const base = flow.reviewed_at || flow.updated_at || flow.created_at;
+  if (!base) return null;
+  const d = new Date(String(base).replace(' ', 'T') + 'Z');
+  if (isNaN(d)) return null;
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
+/** A LIKE pattern that matches the text literally (use with ESCAPE '\'). */
+export const likePattern = (q) => '%' + String(q).replace(/[\\%_]/g, (m) => '\\' + m) + '%';

@@ -6,6 +6,7 @@ import {
   hashPassword, verifyPassword, sha256, randomToken, COOKIE, sessionCookie, readCookie,
   loadDirectory, loadForms, recordLabel, formViewSQL,
   canViewForm, canAddForm, tagRule, assertSelect, tabular,
+  STATUSES, cleanStatus, reviewDueAt, likePattern,
 } from './lib.js';
 import { advance, startNode, mergeFormData } from './engine.js';
 import { seedDemo } from './seed.js';
@@ -23,7 +24,7 @@ class Ctx {
   constructor(req, env, exec) {
     this.req = req; this.env = env; this.db = env.DB; this.exec = exec;
     this.url = new URL(req.url); this.user = null; this.cookies = [];
-    this._dir = null; this._forms = null; this._settings = null;
+    this._dir = null; this._forms = null; this._settings = null; this._body = undefined; this.noteInfo = null;
   }
   async dir() { return this._dir || (this._dir = await loadDirectory(this.db)); }
   async forms() { return this._forms || (this._forms = await loadForms(this.db)); }
@@ -33,7 +34,9 @@ class Ctx {
     if (!this._settings) this._settings = Object.fromEntries((await all(this.db, 'SELECT key, value FROM settings')).map(r => [r.key, r.value]));
     return this._settings;
   }
-  async body() { try { return await this.req.json(); } catch { throw new HttpError(400, 'Invalid JSON body'); } }
+  async body() { if (this._body === undefined) { try { this._body = await this.req.json(); } catch { throw new HttpError(400, 'Invalid JSON body'); } } return this._body; }
+  /** What the audit log should say about this change (name of the thing, and a short detail). */
+  note(name, detail) { this.noteInfo = { name, detail }; }
   requireAdmin() { if (!this.user || !this.user.is_admin) throw new HttpError(403, 'Administrators only'); }
 }
 
@@ -58,6 +61,7 @@ export default {
         if (r.opts.admin) c.requireAdmin();
         const params = {}; r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
         const out = await r.handler(c, params);
+        if (r.opts.admin && req.method !== 'GET') await writeAudit(c, r, params, out);
         const res = out instanceof Response ? out : reply(out ?? { ok: true });
         c.cookies.forEach(ck => res.headers.append('set-cookie', ck));
         return res;
@@ -159,7 +163,8 @@ route('GET', '/api/meta', async (c) => {
     tags: [...D.tags.values()],
     categories: D.categories(),
     people: [...D.persons.values()].filter(p => p.active).map(p => ({ id: p.id, name: p.name, tagIds: [...D.tagIdsOf(p.id)] })),
-    forms: forms.map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields, checks: f.checks, canView: canViewForm(c.user, D, f), canAdd: canAddForm(c.user, D, f) })),
+    areas: await all(c.db, 'SELECT id, name, description, color, owner_id FROM areas ORDER BY name'),
+    forms: forms.filter(f => f.status !== 'archived' || c.user.is_admin).map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields, checks: f.checks, area_id: f.area_id, status: f.status, canView: canViewForm(c.user, D, f), canAdd: f.status === 'archived' ? false : canAddForm(c.user, D, f) })),
     openTasks: (await openTasksFor(c, c.user.id)).length,
   };
 });
@@ -185,10 +190,10 @@ async function canSeeInstance(c, inst) {
 // ---------------------------------------------------------------- home & processes
 route('GET', '/api/home', async (c) => {
   const D = await c.dir();
-  const flows = (await all(c.db, 'SELECT id, name, description, graph FROM flows ORDER BY name')).filter(f => {
+  const flows = (await all(c.db, "SELECT id, name, description, graph, area_id, status FROM flows WHERE status = 'active' OR (status = 'draft' AND ? = 1) ORDER BY name", c.user.is_admin ? 1 : 0)).filter(f => {
     const s = startNode(parse(f.graph, { nodes: [] }));
     return s && tagRule(c.user, D, s.startTags);
-  }).map(f => ({ id: f.id, name: f.name, description: f.description }));
+  }).map(f => ({ id: f.id, name: f.name, description: f.description, area_id: f.area_id, status: f.status }));
   const mine = await all(c.db, 'SELECT * FROM v_instances WHERE id IN (SELECT id FROM instances WHERE started_by = ?) ORDER BY created_at DESC LIMIT 8', c.user.id);
   return { tasks: await openTasksFor(c, c.user.id), flows, mine };
 });
@@ -198,7 +203,8 @@ route('POST', '/api/flows/:id/start', async (c, { id }) => {
   if (!flow) throw new HttpError(404, 'Flow not found');
   const graph = parse(flow.graph, { nodes: [], edges: [] });
   const forms = await c.forms();
-  const errs = FB.logic.lintFlow(graph, forms.map(f => f.id));
+  if (flow.status === 'archived' || (flow.status === 'draft' && !c.user.is_admin)) throw new HttpError(409, 'This process is not in use (status: ' + flow.status + ')');
+  const errs = FB.logic.lintFlow(graph, forms.filter(f => f.status !== 'archived').map(f => f.id));
   if (errs.length) throw new HttpError(400, 'This process is not ready: ' + errs[0]);
   const D = await c.dir();
   const s = startNode(graph);
@@ -360,6 +366,7 @@ route('GET', '/api/forms/:id/options', async (c, { id }) => {
 
 route('POST', '/api/forms/:id/records', async (c, { id }) => {
   const form = await c.form(id), D = await c.dir();
+  if (form.status === 'archived') throw new HttpError(409, 'This form is archived');
   if (!canAddForm(c.user, D, form)) throw new HttpError(403, 'You may not add records to this form directly');
   const b = await c.body();
   const res = await finalizeForm(c, form, b.data, { initiator: D.profile(c.user.id) });
@@ -397,12 +404,14 @@ route('DELETE', '/api/records/:id', async (c, { id }) => { await run(c.db, 'DELE
 
 // ---------------------------------------------------------------- handbook (process documentation)
 route('GET', '/api/handbook', async (c) => {
-  const rows = await all(c.db, 'SELECT id, name, description, doc, version, updated_at, graph FROM flows ORDER BY name');
-  return rows.map(f => { const g = parse(f.graph, { nodes: [] }); return { id: f.id, name: f.name, description: f.description, doc: parse(f.doc, {}), version: f.version, updated_at: f.updated_at, steps: g.nodes.filter(n => n.type === 'task').length }; });
+  const rows = await all(c.db, `SELECT f.id, f.name, f.description, f.doc, f.version, f.updated_at, f.graph, f.area_id, f.status, f.owner_id, f.review_months, f.reviewed_at, p.name AS owner_name
+    FROM flows f LEFT JOIN persons p ON p.id = f.owner_id WHERE f.status = 'active' OR (? = 1 AND f.status != 'archived') ORDER BY f.name`, c.user.is_admin ? 1 : 0);
+  return rows.map(f => { const g = parse(f.graph, { nodes: [] }), due = reviewDueAt(f); return { id: f.id, name: f.name, description: f.description, doc: parse(f.doc, {}), version: f.version, updated_at: f.updated_at,
+    area_id: f.area_id, status: f.status, owner: f.owner_name || '', reviewDue: due, overdue: !!(due && due < now().slice(0, 10)), steps: g.nodes.filter(n => n.type === 'task').length }; });
 });
 route('GET', '/api/handbook/:id', async (c, { id }) => {
-  const f = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
-  if (!f) throw new HttpError(404, 'Process not found');
+  const f = await first(c.db, 'SELECT f.*, p.name AS owner_name, a.name AS area_name FROM flows f LEFT JOIN persons p ON p.id = f.owner_id LEFT JOIN areas a ON a.id = f.area_id WHERE f.id = ?', Number(id));
+  if (!f || (f.status !== 'active' && !c.user.is_admin)) throw new HttpError(404, 'Process not found');
   const D = await c.dir(), forms = await c.formsMap();
   const graph = parse(f.graph, { nodes: [], edges: [] });
   const stats = await first(c.db, "SELECT count(*) AS runs, sum(status = 'running') AS running, round(avg(hours), 1) AS avg_hours FROM v_instances WHERE flow = ?", f.name);
@@ -413,25 +422,37 @@ route('GET', '/api/handbook/:id', async (c, { id }) => {
     dueHours: n.dueHours || null,
     next: graph.edges.filter(e => e.from === n.id).map(e => ({ to: (graph.nodes.find(x => x.id === e.to) || {}).name, when: e.label || e.condition || '' })),
   }));
-  return { id: f.id, name: f.name, description: f.description, doc: parse(f.doc, {}), version: f.version, updated_at: f.updated_at, graph, steps, stats };
+  const due = reviewDueAt(f);
+  return { id: f.id, name: f.name, description: f.description, doc: parse(f.doc, {}), version: f.version, updated_at: f.updated_at, graph, steps, stats,
+    status: f.status, area_id: f.area_id, area: f.area_name || '', owner_id: f.owner_id, owner: f.owner_name || '', reviewMonths: f.review_months, reviewedAt: f.reviewed_at, reviewDue: due, overdue: !!(due && due < now().slice(0, 10)),
+    canReview: !!(c.user.is_admin || (f.owner_id && f.owner_id === c.user.id)) };
+});
+// "I have read this process and it is still right": restarts the review clock (admin or the process owner)
+route('POST', '/api/flows/:id/review', async (c, { id }) => {
+  const f = await first(c.db, 'SELECT id, name, owner_id FROM flows WHERE id = ?', Number(id));
+  if (!f) throw new HttpError(404, 'Process not found');
+  if (!c.user.is_admin && f.owner_id !== c.user.id) throw new HttpError(403, 'Only the owner or an administrator can mark a process as reviewed');
+  await run(c.db, 'UPDATE flows SET reviewed_at = ? WHERE id = ?', now(), f.id);
+  await logAudit(c, 'reviewed', 'flow', f.id, f.name);
+  return { ok: true };
 });
 
 // ---------------------------------------------------------------- dashboards
 route('GET', '/api/dashboards', async (c) => {
   const D = await c.dir();
   return (await all(c.db, 'SELECT * FROM dashboards ORDER BY name')).map(d => ({ ...d, widgets: parse(d.widgets, []), access: parse(d.access, {}) }))
-    .filter(d => tagRule(c.user, D, d.access.viewTags)).map(d => ({ id: d.id, name: d.name, widgets: d.widgets.length }));
+    .filter(d => tagRule(c.user, D, d.access.viewTags) && (d.status !== 'archived' || c.user.is_admin)).map(d => ({ id: d.id, name: d.name, widgets: d.widgets.length, area_id: d.area_id, status: d.status, owner_id: d.owner_id, updated_at: d.updated_at }));
 });
 route('GET', '/api/dashboards/:id', async (c, { id }) => {
   const d = await first(c.db, 'SELECT * FROM dashboards WHERE id = ?', Number(id));
   if (!d) throw new HttpError(404, 'Dashboard not found');
   const D = await c.dir();
   const access = parse(d.access, {});
-  if (!tagRule(c.user, D, access.viewTags)) throw new HttpError(403, 'No access to this dashboard');
+  if (!tagRule(c.user, D, access.viewTags) || (d.status === 'archived' && !c.user.is_admin)) throw new HttpError(403, 'No access to this dashboard');
   const widgets = parse(d.widgets, []);
   const results = {};
   await Promise.all(widgets.map(async w => { results[w.id] = await runWidget(c, w); }));
-  return { id: d.id, name: d.name, widgets, access, results, canEdit: !!c.user.is_admin };
+  return { id: d.id, name: d.name, widgets, access, results, canEdit: !!c.user.is_admin, area_id: d.area_id, status: d.status, owner_id: d.owner_id };
 });
 async function runWidget(c, w) {
   try { const sql = FB.logic.widgetSQL(w); if (!sql) return { columns: [], values: [] }; return await tabular(c.db, assertSelect(sql)); }
@@ -440,24 +461,36 @@ async function runWidget(c, w) {
 route('POST', '/api/admin/query', async (c) => runWidget(c, (await c.body()).widget || {}), { admin: true });
 route('POST', '/api/admin/dashboards', async (c) => {
   const b = await c.body();
-  return { id: await run(c.db, 'INSERT INTO dashboards(name, widgets, updated_at) VALUES (?,?,?)', String(b.name || 'New dashboard').slice(0, 120), '[]', now()) };
+  return { id: await run(c.db, 'INSERT INTO dashboards(name, widgets, area_id, status, owner_id, updated_at) VALUES (?,?,?,?,?,?)', String(b.name || 'New dashboard').slice(0, 120), '[]', await areaOf(c, b.area_id), 'active', c.user.id, now()) };
 }, { admin: true });
 route('PUT', '/api/admin/dashboards/:id', async (c, { id }) => {
   const b = await c.body();
-  await run(c.db, 'UPDATE dashboards SET name = ?, widgets = ?, access = ?, updated_at = ? WHERE id = ?', String(b.name || 'Dashboard').slice(0, 120), JSON.stringify(b.widgets || []), JSON.stringify(b.access || {}), now(), Number(id));
+  const old = await first(c.db, 'SELECT * FROM dashboards WHERE id = ?', Number(id));
+  if (!old) throw new HttpError(404, 'Dashboard not found');
+  await run(c.db, 'UPDATE dashboards SET name = ?, widgets = ?, access = ?, area_id = ?, status = ?, owner_id = ?, updated_at = ? WHERE id = ?', String(b.name || 'Dashboard').slice(0, 120), JSON.stringify(b.widgets || []), JSON.stringify(b.access || {}),
+    b.area_id === undefined ? old.area_id : await areaOf(c, b.area_id), cleanStatus(b.status, old.status), b.owner_id === undefined ? old.owner_id : await personOf(c, b.owner_id), now(), old.id);
 }, { admin: true });
-route('DELETE', '/api/admin/dashboards/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM dashboards WHERE id = ?', Number(id)); }, { admin: true });
+route('DELETE', '/api/admin/dashboards/:id', async (c, { id }) => {
+  const d = await first(c.db, 'SELECT id, name, status FROM dashboards WHERE id = ?', Number(id));
+  if (!d) throw new HttpError(404, 'Dashboard not found');
+  if (d.status !== 'archived') throw new HttpError(409, 'Archive the dashboard first: archived items can be deleted for good.');
+  c.note(d.name); await run(c.db, 'DELETE FROM dashboards WHERE id = ?', d.id);
+}, { admin: true });
 
 // ---------------------------------------------------------------- admin: forms
 route('GET', '/api/admin/forms', async (c) => {
   const counts = Object.fromEntries((await all(c.db, 'SELECT form_id, count(*) AS n FROM submissions GROUP BY form_id')).map(r => [r.form_id, r.n]));
-  return (await c.forms()).map(f => ({ id: f.id, name: f.name, slug: f.slug, fields: f.fields.length, records: counts[f.id] || 0, updated_at: f.updated_at }));
+  const flows = (await all(c.db, 'SELECT name, graph, status FROM flows')).map(fl => ({ name: fl.name, status: fl.status, forms: new Set(parse(fl.graph, { nodes: [] }).nodes.map(n => Number(n.formId)).filter(Boolean)) }));
+  return (await c.forms()).map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields.length, records: counts[f.id] || 0, updated_at: f.updated_at, area_id: f.area_id, status: f.status, owner_id: f.owner_id,
+    usedIn: flows.filter(fl => fl.status !== 'archived' && fl.forms.has(f.id)).length }));
 }, { admin: true });
 route('GET', '/api/admin/forms/:id', async (c, { id }) => {
   const forms = await c.forms();
   const f = await c.form(id);
-  const usedIn = (await all(c.db, 'SELECT id, name, graph FROM flows')).filter(fl => parse(fl.graph, { nodes: [] }).nodes.some(n => Number(n.formId) === f.id)).map(fl => fl.name);
-  return { form: f, others: forms.filter(x => x.id !== f.id).map(x => ({ id: x.id, name: x.name, fields: x.fields })), usedIn };
+  const usedIn = (await all(c.db, 'SELECT id, name, graph, status FROM flows')).filter(fl => parse(fl.graph, { nodes: [] }).nodes.some(n => Number(n.formId) === f.id)).map(fl => ({ id: fl.id, name: fl.name, status: fl.status }));
+  const usedByForms = forms.filter(x => x.id !== f.id && x.fields.some(fd => fd.type === 'record' && Number(fd.recordForm) === f.id)).map(x => ({ id: x.id, name: x.name }));
+  const usedInDash = (await all(c.db, 'SELECT id, name, widgets FROM dashboards')).filter(d => String(d.widgets).includes('form_' + f.slug)).map(d => ({ id: d.id, name: d.name }));
+  return { form: f, others: forms.filter(x => x.id !== f.id).map(x => ({ id: x.id, name: x.name, fields: x.fields })), usedIn, usedByForms, usedInDash };
 }, { admin: true });
 route('POST', '/api/admin/forms', async (c) => {
   const b = await c.body();
@@ -465,24 +498,31 @@ route('POST', '/api/admin/forms', async (c) => {
   if (!name) throw new HttpError(400, 'Name required');
   let slug = slugify(name), n = 2;
   while (await first(c.db, 'SELECT 1 FROM forms WHERE slug = ?', slug)) slug = slugify(name) + '_' + n++;
-  const id = await run(c.db, 'INSERT INTO forms(name, slug, description, fields, access, updated_at) VALUES (?,?,?,?,?,?)', name, slug, '', '[]', '{}', now());
+  const id = await run(c.db, 'INSERT INTO forms(name, slug, description, fields, access, area_id, status, owner_id, updated_at) VALUES (?,?,?,?,?,?,?,?,?)', name, slug, '', '[]', '{}', await areaOf(c, b.area_id), 'active', c.user.id, now());
   await c.db.batch(formViewSQL({ id, slug, fields: [] }).map(s => c.db.prepare(s)));
   return { id };
 }, { admin: true });
 route('PUT', '/api/admin/forms/:id', async (c, { id }) => {
   const old = await c.form(id);
   const b = await c.body();
-  const form = { ...old, name: String(b.name || old.name).slice(0, 120), description: String(b.description || ''), fields: Array.isArray(b.fields) ? b.fields : [], checks: Array.isArray(b.checks) ? b.checks : [], access: b.access || {} };
+  const form = { ...old, name: String(b.name || old.name).slice(0, 120), description: String(b.description || ''), fields: Array.isArray(b.fields) ? b.fields : [], checks: Array.isArray(b.checks) ? b.checks : [], access: b.access || {},
+    area_id: b.area_id === undefined ? old.area_id : await areaOf(c, b.area_id), status: cleanStatus(b.status, old.status), owner_id: b.owner_id === undefined ? old.owner_id : await personOf(c, b.owner_id) };
+  if (form.status === 'archived' && old.status !== 'archived') {
+    const active = (await all(c.db, "SELECT name, graph FROM flows WHERE status = 'active'")).filter(fl => parse(fl.graph, { nodes: [] }).nodes.some(n => Number(n.formId) === form.id));
+    if (active.length) throw new HttpError(409, 'This form is used by active process' + (active.length > 1 ? 'es' : '') + ': ' + active.map(a => a.name).join(', ') + '. Change those first.');
+  }
   const problems = FB.logic.lint(form);
   if (problems.length) throw new HttpError(400, problems[0], { problems });
   await c.db.batch([
-    c.db.prepare('UPDATE forms SET name = ?, description = ?, fields = ?, checks = ?, access = ?, updated_at = ? WHERE id = ?')
-      .bind(form.name, form.description, JSON.stringify(form.fields), JSON.stringify(form.checks), JSON.stringify(form.access), now(), form.id),
+    c.db.prepare('UPDATE forms SET name = ?, description = ?, fields = ?, checks = ?, access = ?, area_id = ?, status = ?, owner_id = ?, updated_at = ? WHERE id = ?')
+      .bind(form.name, form.description, JSON.stringify(form.fields), JSON.stringify(form.checks), JSON.stringify(form.access), form.area_id, form.status, form.owner_id, now(), form.id),
     ...formViewSQL(form).map(s => c.db.prepare(s)),
   ]);
 }, { admin: true });
 route('DELETE', '/api/admin/forms/:id', async (c, { id }) => {
   const f = await c.form(id);
+  if (f.status !== 'archived') throw new HttpError(409, 'Archive the form first: archived items can be deleted for good.');
+  c.note(f.name);
   const used = (await all(c.db, 'SELECT name, graph FROM flows')).filter(fl => parse(fl.graph, { nodes: [] }).nodes.some(n => Number(n.formId) === f.id));
   if (used.length) throw new HttpError(409, 'Form is used in flow: ' + used.map(u => u.name).join(', '));
   await c.db.batch([c.db.prepare('DELETE FROM forms WHERE id = ?').bind(f.id), c.db.prepare(`DROP VIEW IF EXISTS ${qi('form_' + f.slug)}`)]);
@@ -490,34 +530,85 @@ route('DELETE', '/api/admin/forms/:id', async (c, { id }) => {
 
 // ---------------------------------------------------------------- admin: flows
 route('GET', '/api/admin/flows', async (c) => {
-  const forms = (await c.forms()).map(f => f.id);
+  const forms = (await c.forms()).filter(f => f.status !== 'archived').map(f => f.id);
   const stats = Object.fromEntries((await all(c.db, "SELECT flow_id, count(*) AS n, sum(status = 'running') AS r FROM instances GROUP BY flow_id")).map(r => [r.flow_id, r]));
   return (await all(c.db, 'SELECT * FROM flows ORDER BY name')).map(f => {
-    const g = parse(f.graph, { nodes: [], edges: [] });
-    return { id: f.id, name: f.name, description: f.description, version: f.version, steps: g.nodes.length, issues: FB.logic.lintFlow(g, forms).length, runs: stats[f.id]?.n || 0, running: stats[f.id]?.r || 0 };
+    const g = parse(f.graph, { nodes: [], edges: [] }), due = reviewDueAt(f);
+    return { id: f.id, name: f.name, description: f.description, version: f.version, steps: g.nodes.length, issues: FB.logic.lintFlow(g, forms).length, runs: stats[f.id]?.n || 0, running: stats[f.id]?.r || 0,
+      area_id: f.area_id, status: f.status, owner_id: f.owner_id, reviewDue: due, overdue: !!(due && due < now().slice(0, 10)), updated_at: f.updated_at };
   });
 }, { admin: true });
 route('GET', '/api/admin/flows/:id', async (c, { id }) => {
   const f = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
   if (!f) throw new HttpError(404, 'Flow not found');
-  return { ...f, graph: parse(f.graph, { nodes: [], edges: [] }), doc: parse(f.doc, {}) };
+  const forms = (await c.forms()).filter(x => x.status !== 'archived').map(x => x.id);
+  return { ...f, graph: parse(f.graph, { nodes: [], edges: [] }), doc: parse(f.doc, {}), issues: FB.logic.lintFlow(parse(f.graph, { nodes: [], edges: [] }), forms), reviewDue: reviewDueAt(f) };
 }, { admin: true });
 route('POST', '/api/admin/flows', async (c) => {
   const b = await c.body();
   const graph = { nodes: [{ id: 'n1', type: 'start', name: 'Start', x: 80, y: 160 }, { id: 'n2', type: 'end', name: 'Done', x: 460, y: 160 }], edges: [{ id: 'e1', from: 'n1', to: 'n2' }] };
-  return { id: await run(c.db, 'INSERT INTO flows(name, description, graph, doc, version, updated_at) VALUES (?,?,?,?,1,?)', String(b.name || 'New process').slice(0, 120), '', JSON.stringify(graph), '{}', now()) };
+  const fid = await run(c.db, 'INSERT INTO flows(name, description, graph, doc, version, area_id, status, owner_id, review_months, updated_at) VALUES (?,?,?,?,1,?,?,?,12,?)',
+    String(b.name || 'New process').slice(0, 120), '', JSON.stringify(graph), '{}', await areaOf(c, b.area_id), 'draft', c.user.id, now());
+  await snapshotFlow(c, { id: fid, name: String(b.name || 'New process'), graph: JSON.stringify(graph), doc: '{}', version: 1 });
+  return { id: fid };
 }, { admin: true });
 route('PUT', '/api/admin/flows/:id', async (c, { id }) => {
   const f = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
   if (!f) throw new HttpError(404, 'Flow not found');
   const b = await c.body();
-  const graph = JSON.stringify(b.graph || { nodes: [], edges: [] });
+  const graphObj = b.graph || { nodes: [], edges: [] };
+  const graph = JSON.stringify(graphObj);
   const version = graph !== f.graph ? f.version + 1 : f.version; // running processes keep their own snapshot
-  await run(c.db, 'UPDATE flows SET name = ?, description = ?, graph = ?, doc = ?, version = ?, updated_at = ? WHERE id = ?',
-    String(b.name || f.name).slice(0, 120), String(b.description || ''), graph, JSON.stringify(b.doc || {}), version, now(), f.id);
-  return { version, issues: FB.logic.lintFlow(b.graph, (await c.forms()).map(x => x.id)) };
+  const issues = FB.logic.lintFlow(graphObj, (await c.forms()).filter(x => x.status !== 'archived').map(x => x.id));
+  let status = cleanStatus(b.status, f.status), note = '';
+  if (status === 'active' && issues.length) {
+    if (f.status === 'active') { status = 'draft'; note = 'Saved as draft: an active process may not have open issues (' + issues[0] + ')'; }
+    else throw new HttpError(400, 'Fix the issues before activating this process: ' + issues[0], { issues });
+  }
+  const months = b.review_months === undefined ? f.review_months : Math.max(0, Math.min(60, Math.floor(Number(b.review_months)) || 0));
+  await run(c.db, 'UPDATE flows SET name = ?, description = ?, graph = ?, doc = ?, version = ?, area_id = ?, status = ?, owner_id = ?, review_months = ?, updated_at = ? WHERE id = ?',
+    String(b.name || f.name).slice(0, 120), String(b.description || ''), graph, JSON.stringify(b.doc || {}), version,
+    b.area_id === undefined ? f.area_id : await areaOf(c, b.area_id), status, b.owner_id === undefined ? f.owner_id : await personOf(c, b.owner_id), months, now(), f.id);
+  if (version !== f.version) await snapshotFlow(c, { id: f.id, name: String(b.name || f.name), graph, doc: JSON.stringify(b.doc || {}), version });
+  if (status !== f.status) c.note(String(b.name || f.name), 'Status: ' + f.status + ' → ' + status);
+  return { version, issues, status, note };
 }, { admin: true });
-route('DELETE', '/api/admin/flows/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM flows WHERE id = ?', Number(id)); }, { admin: true });
+route('DELETE', '/api/admin/flows/:id', async (c, { id }) => {
+  const f = await first(c.db, 'SELECT id, name, status FROM flows WHERE id = ?', Number(id));
+  if (!f) throw new HttpError(404, 'Flow not found');
+  if (f.status !== 'archived') throw new HttpError(409, 'Archive the process first: archived items can be deleted for good.');
+  const n = (await first(c.db, 'SELECT count(*) AS n FROM instances WHERE flow_id = ?', f.id)).n;
+  c.note(f.name, n ? n + ' process run(s) deleted with it' : '');
+  await run(c.db, 'DELETE FROM flows WHERE id = ?', f.id);
+}, { admin: true });
+
+/** Remember a flow's state at this version (history to look at or restore). Keeps the last 40. */
+async function snapshotFlow(c, f) {
+  await c.db.batch([
+    c.db.prepare('INSERT INTO flow_versions(flow_id, version, name, graph, doc, saved_at, saved_by) VALUES (?,?,?,?,?,?,?)').bind(f.id, f.version, f.name, f.graph, f.doc, now(), c.user.id),
+    c.db.prepare('DELETE FROM flow_versions WHERE flow_id = ? AND id NOT IN (SELECT id FROM flow_versions WHERE flow_id = ? ORDER BY id DESC LIMIT 40)').bind(f.id, f.id),
+  ]);
+}
+route('GET', '/api/admin/flows/:id/versions', async (c, { id }) => {
+  const rows = await all(c.db, 'SELECT v.id, v.version, v.name, v.saved_at, p.name AS who, v.graph FROM flow_versions v LEFT JOIN persons p ON p.id = v.saved_by WHERE v.flow_id = ? ORDER BY v.id DESC', Number(id));
+  return rows.map(r => { const g = parse(r.graph, { nodes: [] }); return { id: r.id, version: r.version, name: r.name, saved_at: r.saved_at, who: r.who, steps: g.nodes.length, tasks: g.nodes.filter(n => n.type === 'task').length }; });
+}, { admin: true });
+route('GET', '/api/admin/flows/:id/versions/:vid', async (c, { id, vid }) => {
+  const v = await first(c.db, 'SELECT * FROM flow_versions WHERE id = ? AND flow_id = ?', Number(vid), Number(id));
+  if (!v) throw new HttpError(404, 'Version not found');
+  return { id: v.id, version: v.version, name: v.name, saved_at: v.saved_at, graph: parse(v.graph, { nodes: [], edges: [] }), doc: parse(v.doc, {}) };
+}, { admin: true });
+route('POST', '/api/admin/flows/:id/restore', async (c, { id }) => {
+  const f = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
+  const v = await first(c.db, 'SELECT * FROM flow_versions WHERE id = ? AND flow_id = ?', Number((await c.body()).versionId), Number(id));
+  if (!f || !v) throw new HttpError(404, 'Version not found');
+  const issues = FB.logic.lintFlow(parse(v.graph, { nodes: [], edges: [] }), (await c.forms()).filter(x => x.status !== 'archived').map(x => x.id));
+  const version = f.version + 1, status = f.status === 'active' && issues.length ? 'draft' : f.status;
+  await run(c.db, 'UPDATE flows SET graph = ?, doc = ?, version = ?, status = ?, updated_at = ? WHERE id = ?', v.graph, v.doc || '{}', version, status, now(), f.id);
+  await snapshotFlow(c, { id: f.id, name: f.name, graph: v.graph, doc: v.doc || '{}', version });
+  c.note(f.name, 'Restored version ' + v.version + ' as version ' + version);
+  return { version, status };
+}, { admin: true });
 
 // ---------------------------------------------------------------- admin: people & tags
 route('GET', '/api/admin/people', async (c) => {
@@ -580,9 +671,149 @@ route('PUT', '/api/admin/settings', async (c) => {
 }, { admin: true });
 route('GET', '/api/admin/export', async (c) => {
   const out = { exported_at: now(), tables: {} };
-  for (const t of ['settings', 'tags', 'forms', 'flows', 'dashboards', 'instances', 'tasks', 'submissions', 'events']) out.tables[t] = await all(c.db, `SELECT * FROM ${t}`);
+  for (const t of ['settings', 'areas', 'tags', 'forms', 'flows', 'flow_versions', 'dashboards', 'instances', 'tasks', 'submissions', 'events', 'audit']) out.tables[t] = await all(c.db, `SELECT * FROM ${t}`);
   out.tables.persons = await all(c.db, 'SELECT id, name, email, is_admin, active, created_at FROM persons');
   out.tables.person_tags = await all(c.db, 'SELECT * FROM person_tags');
   return new Response(JSON.stringify(out, null, 1), { headers: { 'content-type': 'application/json', 'content-disposition': `attachment; filename="ordovia-${now().slice(0, 10)}.json"`, 'cache-control': 'no-store' } });
 }, { admin: true });
 
+
+// ---------------------------------------------------------------- areas (departments / domains: how everything is grouped)
+async function areaOf(c, v) {
+  if (v == null || v === '') return null;
+  const a = await first(c.db, 'SELECT id FROM areas WHERE id = ?', Number(v));
+  if (!a) throw new HttpError(400, 'Unknown area');
+  return a.id;
+}
+async function personOf(c, v) {
+  if (v == null || v === '') return null;
+  const p = (await c.dir()).persons.get(Number(v));
+  if (!p) throw new HttpError(400, 'Unknown person');
+  return p.id;
+}
+route('GET', '/api/areas', async (c) => all(c.db, 'SELECT * FROM v_areas ORDER BY name'));
+async function saveArea(c, id, b) {
+  const name = String(b.name || '').trim().slice(0, 80);
+  if (!name) throw new HttpError(400, 'Give the area a name');
+  if (await first(c.db, 'SELECT 1 FROM areas WHERE name = ? AND id != ?', name, id || 0)) throw new HttpError(409, 'An area with this name exists');
+  if (b.color && !/^#[0-9a-f]{6}$/i.test(b.color)) throw new HttpError(400, 'Colour must look like #4f46e5');
+  const owner = await personOf(c, b.owner_id), desc = String(b.description || '').slice(0, 400), color = b.color || null;
+  if (id) { await run(c.db, 'UPDATE areas SET name = ?, description = ?, color = ?, owner_id = ? WHERE id = ?', name, desc, color, owner, id); return { id }; }
+  return { id: await run(c.db, 'INSERT INTO areas(name, description, color, owner_id, created_at) VALUES (?,?,?,?,?)', name, desc, color, owner, now()) };
+}
+route('POST', '/api/admin/areas', async (c) => saveArea(c, null, await c.body()), { admin: true });
+route('PUT', '/api/admin/areas/:id', async (c, { id }) => saveArea(c, Number(id), await c.body()), { admin: true });
+route('DELETE', '/api/admin/areas/:id', async (c, { id }) => {
+  const a = await first(c.db, 'SELECT id, name FROM areas WHERE id = ?', Number(id));
+  if (!a) throw new HttpError(404, 'Area not found');
+  c.note(a.name, 'Its processes, forms and dashboards are now without area');
+  await run(c.db, 'DELETE FROM areas WHERE id = ?', a.id);
+}, { admin: true });
+
+// ---------------------------------------------------------------- audit log: who changed what, when
+const ENTITY = { forms: 'form', flows: 'process', dashboards: 'dashboard', people: 'person', tags: 'tag', areas: 'area', settings: 'settings', sql: 'sql', records: 'record', instances: 'run', tokens: 'api token' };
+async function logAudit(c, action, entity, entityId, name, detail) {
+  try { await run(c.db, 'INSERT INTO audit(at, person_id, action, entity, entity_id, name, detail) VALUES (?,?,?,?,?,?,?)', now(), c.user ? c.user.id : null, action, entity, entityId ?? null, name ? String(name).slice(0, 200) : null, detail ? String(detail).slice(0, 400) : null); }
+  catch (e) { console.warn('audit failed', e.message); }
+}
+async function writeAudit(c, r, params, out) {
+  const parts = c.url.pathname.split('/').filter(Boolean), seg = parts[parts[1] === 'admin' ? 2 : 1] || '';
+  if (seg === 'query' || seg === 'review') return;
+  const method = c.req.method, body = (c._body && typeof c._body === 'object') ? c._body : {};
+  const tail = parts[parts.length - 1];
+  let action = method === 'POST' ? 'created' : method === 'PUT' ? 'changed' : 'deleted';
+  if (method === 'POST' && params.id && /^[a-z]+$/.test(tail)) action = tail;   // e.g. restore
+  let name = c.noteInfo && c.noteInfo.name != null ? c.noteInfo.name : (body.name || body.company || (body.category ? body.category + ': ' + body.value : null));
+  let detail = c.noteInfo ? c.noteInfo.detail : null;
+  if (seg === 'sql') { const q = String(body.sql || ''); if (/^\s*(select|with|pragma|explain)\b/i.test(q)) return; action = 'ran'; name = 'SQL statement'; detail = q.slice(0, 300); }
+  if (seg === 'settings') { name = 'Workspace settings'; detail = 'Changed: ' + Object.keys(body).filter(k => body[k] != null).join(', '); }
+  if (seg === 'people' && method === 'PUT' && body.password) detail = (detail ? detail + '; ' : '') + 'password changed';
+  const entityId = params.id ? Number(params.id) : (out && out.id) || null;
+  await logAudit(c, action, ENTITY[seg] || seg, entityId, name, detail);
+}
+route('GET', '/api/admin/audit', async (c) => {
+  const lim = Math.min(500, Number(c.url.searchParams.get('limit')) || 200), ent = c.url.searchParams.get('entity'), eid = Number(c.url.searchParams.get('id')) || 0;
+  const where = [], args = [];
+  if (ent) { where.push('a.entity = ?'); args.push(ent); }
+  if (eid) { where.push('a.entity_id = ?'); args.push(eid); }
+  return all(c.db, `SELECT a.id, a.at, a.action, a.entity, a.entity_id, a.name, a.detail, p.name AS who FROM audit a LEFT JOIN persons p ON p.id = a.person_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY a.id DESC LIMIT ${lim}`, ...args);
+}, { admin: true });
+
+// ---------------------------------------------------------------- health: what needs attention, in one list
+route('GET', '/api/admin/health', async (c) => {
+  const D = await c.dir(), forms = await c.forms(), today = now().slice(0, 10), items = [];
+  const add = (level, kind, title, detail, link) => items.push({ level, kind, title, detail: detail || '', link: link || '' });
+  const liveForms = forms.filter(f => f.status !== 'archived');
+  const flows = await all(c.db, 'SELECT * FROM flows WHERE status != ? ORDER BY name', 'archived');
+  const usedForms = new Set();
+  for (const f of flows) {
+    const g = parse(f.graph, { nodes: [], edges: [] });
+    g.nodes.forEach(n => { if (n.formId) usedForms.add(Number(n.formId)); });
+    const issues = FB.logic.lintFlow(g, liveForms.map(x => x.id)), link = '#/admin/flows/' + f.id;
+    if (f.status === 'active' && issues.length) add('error', 'process', f.name + ' is active but has issues', issues.slice(0, 3).join(' · '), link);
+    // can anybody actually receive each task?
+    for (const n of g.nodes.filter(x => x.type === 'task')) {
+      const rule = n.assignee || { type: 'initiator' };
+      if (rule.type === 'person' && !(D.persons.get(Number(rule.personId)) || {}).active) add(f.status === 'active' ? 'error' : 'warn', 'routing', f.name + ' · “' + n.name + '” goes to a person who is gone or inactive', D.describe(rule), link);
+      if (rule.type === 'tags' && (rule.tagIds || []).length && ![...D.persons.values()].some(p => p.active && D.hasTags(p.id, rule.tagIds))) add(f.status === 'active' ? 'error' : 'warn', 'routing', f.name + ' · “' + n.name + '” has nobody to go to', 'No active person matches: ' + D.describe(rule), link);
+    }
+    const st = g.nodes.find(n => n.type === 'start');
+    if (f.status === 'active' && st && (st.startTags || []).length && ![...D.persons.values()].some(p => p.active && D.hasTags(p.id, st.startTags))) add('warn', 'routing', f.name + ' cannot be started by anyone but admins', 'Nobody has the tags that may start it', link);
+    if (f.status === 'active' && !f.owner_id) add('warn', 'ownership', f.name + ' has no owner', 'Every process needs a person who keeps it right', link);
+    const due = reviewDueAt(f); if (f.status === 'active' && due && due < today) add('warn', 'review', f.name + ' is due for review', 'Review was due ' + due, '#/handbook/' + f.id);
+    if (f.status === 'draft' && f.updated_at && f.updated_at < new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)) add('info', 'draft', f.name + ' has been a draft for over 30 days', 'Finish it or archive it', link);
+    if (f.status === 'active' && !f.area_id) add('info', 'structure', f.name + ' is in no area', '', link);
+  }
+  for (const f of liveForms) {
+    const n = (await first(c.db, 'SELECT count(*) AS n FROM submissions WHERE form_id = ?', f.id)).n;
+    if (!usedForms.has(f.id) && !n && f.updated_at && f.updated_at < new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10)) add('info', 'unused', f.name + ' is not used anywhere', 'No process uses it and it has no records – archive it?', '#/admin/forms/' + f.id);
+    if (!f.area_id) add('info', 'structure', f.name + ' (form) is in no area', '', '#/admin/forms/' + f.id);
+  }
+  const stuck = await all(c.db, "SELECT id, title FROM instances WHERE status = 'stuck' LIMIT 20");
+  stuck.forEach(i => add('error', 'run', 'Process run “' + i.title + '” is stuck', 'No arrow matched – fix the flow, then delete the run', '#/processes/' + i.id));
+  const overdue = await all(c.db, "SELECT t.id, t.name, i.title, t.due_at FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE t.status = 'open' AND t.due_at < ? ORDER BY t.due_at LIMIT 20", now());
+  overdue.forEach(t => add('warn', 'overdue', 'Overdue: ' + t.name + ' – ' + t.title, 'Due ' + t.due_at, '#/task/' + t.id));
+  const old = await all(c.db, "SELECT t.id, t.name, i.title, t.created_at FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE t.status = 'open' AND t.due_at IS NULL AND t.created_at < ? LIMIT 20", new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 19).replace('T', ' '));
+  old.forEach(t => add('warn', 'stale', 'Open for over 30 days: ' + t.name + ' – ' + t.title, 'Opened ' + t.created_at, '#/task/' + t.id));
+  const dashes = await all(c.db, "SELECT id, name, widgets FROM dashboards WHERE status != 'archived' LIMIT 20");
+  for (const d of dashes) for (const w of parse(d.widgets, [])) { const r = await runWidget(c, w); if (r.error) add('warn', 'dashboard', 'Dashboard “' + d.name + '”: widget “' + (w.title || w.id) + '” fails', r.error.slice(0, 160), '#/dashboards/' + d.id); }
+  const noArea = await first(c.db, "SELECT count(*) AS n FROM dashboards WHERE area_id IS NULL AND status != 'archived'");
+  if (noArea.n) add('info', 'structure', noArea.n + ' dashboard' + (noArea.n > 1 ? 's are' : ' is') + ' in no area', '', '#/dashboards');
+  const admins = [...D.persons.values()].filter(p => p.is_admin && p.active).length;
+  if (admins < 2) add('info', 'people', 'Only one administrator', 'Make a second person administrator so nobody is locked out', '#/admin/people');
+  const order = { error: 0, warn: 1, info: 2 };
+  items.sort((a, b) => order[a.level] - order[b.level]);
+  return { items, counts: { error: items.filter(i => i.level === 'error').length, warn: items.filter(i => i.level === 'warn').length, info: items.filter(i => i.level === 'info').length } };
+}, { admin: true });
+
+// ---------------------------------------------------------------- search across everything the person may see
+route('GET', '/api/search', async (c) => {
+  const q = String(c.url.searchParams.get('q') || '').trim().slice(0, 80);
+  if (q.length < 2) return { q, results: [] };
+  const pat = likePattern(q), D = await c.dir(), forms = await c.forms(), res = [], adm = c.user.is_admin ? 1 : 0;
+  const add = (type, title, sub, link, extra) => res.push({ type, title, sub: sub || '', link, ...(extra || {}) });
+  const areas = new Map((await all(c.db, 'SELECT id, name FROM areas')).map(a => [a.id, a.name]));
+  for (const f of await all(c.db, "SELECT id, name, description, area_id, status, graph FROM flows WHERE (status = 'active' OR (? = 1 AND status != 'archived')) AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR doc LIKE ? ESCAPE '\\' OR graph LIKE ? ESCAPE '\\') ORDER BY name LIMIT 12", adm, pat, pat, pat, pat)) {
+    const hit = parse(f.graph, { nodes: [] }).nodes.find(n => String(n.name || '').toLowerCase().includes(q.toLowerCase()) || String(n.instructions || '').toLowerCase().includes(q.toLowerCase()));
+    add('Process', f.name, [areas.get(f.area_id), f.status !== 'active' ? f.status : '', hit && !f.name.toLowerCase().includes(q.toLowerCase()) ? 'step: ' + hit.name : ''].filter(Boolean).join(' · '), '#/handbook/' + f.id);
+  }
+  for (const f of forms.filter(x => x.status !== 'archived' || adm)) {
+    if (!(canViewForm(c.user, D, f) || canAddForm(c.user, D, f))) continue;
+    const lq = q.toLowerCase();
+    if (f.name.toLowerCase().includes(lq) || String(f.description || '').toLowerCase().includes(lq) || f.fields.some(x => String(x.label || '').toLowerCase().includes(lq))) add('Form', f.name, areas.get(f.area_id) || '', '#/data/' + f.id);
+  }
+  for (const d of await all(c.db, "SELECT id, name, area_id, access, status FROM dashboards WHERE (status != 'archived' OR ? = 1) AND name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 8", adm, pat)) if (tagRule(c.user, D, parse(d.access, {}).viewTags)) add('Dashboard', d.name, areas.get(d.area_id) || '', '#/dashboards/' + d.id);
+  for (const a of await all(c.db, "SELECT id, name, description FROM areas WHERE name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' LIMIT 5", pat, pat)) add('Area', a.name, a.description, '#/area/' + a.id);
+  for (const p of [...D.persons.values()].filter(p => p.active && (p.name.toLowerCase().includes(q.toLowerCase()) || p.email.toLowerCase().includes(q.toLowerCase()))).slice(0, 6)) add('Person', p.name, D.tagsOf(p.id).map(t => t.value).join(' · '), '');
+  const insts = await all(c.db, "SELECT i.id, i.title, i.status, i.started_by FROM instances i WHERE i.title LIKE ? ESCAPE '\\' ORDER BY i.id DESC LIMIT 30", pat);
+  let shown = 0;
+  for (const i of insts) { if (shown >= 6) break; if (await canSeeInstance(c, i)) { add('Run', i.title, i.status, '#/processes/' + i.id); shown++; } }
+  const recs = await all(c.db, "SELECT id, form_id, person_id, data FROM submissions WHERE data LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 60", pat);
+  const fm = new Map(forms.map(f => [f.id, f])); shown = 0;
+  for (const r of recs) {
+    const f = fm.get(r.form_id); if (!f || shown >= 8) continue;
+    if (!canViewForm(c.user, D, f) && r.person_id !== c.user.id) continue;
+    add('Record', recordLabel(f, r.id, parse(r.data, {})), f.name, '#/data/' + f.id + '?open=' + r.id); shown++;
+  }
+  return { q, results: res };
+});

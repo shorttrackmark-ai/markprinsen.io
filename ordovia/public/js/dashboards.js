@@ -111,7 +111,14 @@
   Dash.listPage = async function (main) {
     const list = await FB.api.get('/dashboards');
     main.innerHTML = `<div class="page"><div class="page-head"><h1>Dashboards</h1>${FB.isAdmin() ? '<div class="actions"><button class="btn primary" id="dNew">+ New dashboard</button></div>' : ''}</div>
-      <div class="cards">${list.map(d => `<a class="card link-card" href="#/dashboards/${d.id}"><h3>${esc(d.name)}</h3><p class="muted">${d.widgets} widget${d.widgets === 1 ? '' : 's'}</p></a>`).join('') || '<p class="muted">No dashboards yet.</p>'}</div></div>`;
+      <div id="dbFilters"></div><div id="dbList"></div></div>`;
+    const st = { q: '', area: '', status: 'live' };
+    const draw = () => {
+      const shown = list.filter(d => FB.org.match(d, st, d.name));
+      $('#dbList').innerHTML = FB.org.groupedCards(shown, d => d.area_id, d => `<a class="card link-card" href="#/dashboards/${d.id}"><h3>${esc(d.name)} ${FB.org.status(d.status)}</h3><p class="muted">${d.widgets} widget${d.widgets === 1 ? '' : 's'}</p></a>`, 'No dashboards match.');
+    };
+    FB.org.filters($('#dbFilters'), st, { status: FB.isAdmin(), placeholder: 'Search dashboards…' }, draw);
+    draw();
     const n = $('#dNew');
     if (n) n.onclick = async () => { const name = prompt('Dashboard name', 'New dashboard'); if (name) { const r = await FB.api.post('/admin/dashboards', { name }); FB.go('#/dashboards/' + r.id); } };
   };
@@ -126,16 +133,19 @@
       <div id="dEditBar" class="edit-bar card" hidden>
         <label>Name<input id="dName" value="${esc(d.name)}"></label>
         <label>Visible for <small class="muted">(tags, empty = everyone)</small>${multiSelect('id="dAccess"', FB.tagItems(), d.access.viewTags, 3)}</label>
-        <div class="edit-actions"><button class="btn primary" id="dAdd">+ Add widget</button><button class="btn danger ghost" id="dDel">Delete dashboard</button></div></div>
+        <div id="dOrg"></div>
+        <div class="edit-actions"><button class="btn primary" id="dAdd">+ Add widget</button><button class="btn ghost" id="dArchive">${d.status === 'archived' ? 'Restore' : 'Archive'}</button><button class="btn danger ghost" id="dDel" ${d.status === 'archived' ? '' : 'hidden'}>Delete…</button></div></div>
       <div class="dash-grid" id="dGrid"></div></div>`;
-    const persist = async () => { try { await FB.api.put('/admin/dashboards/' + d.id, { name: d.name, widgets: d.widgets, access: d.access }); } catch (e) { toast(e.message, 'error'); } };
+    const persist = async () => { try { await FB.api.put('/admin/dashboards/' + d.id, { name: d.name, widgets: d.widgets, access: d.access, area_id: d.area_id, owner_id: d.owner_id, status: d.status }); } catch (e) { toast(e.message, 'error'); } };
     $('#dRefresh').onclick = async () => { const fresh = await FB.api.get('/dashboards/' + id); d.results = fresh.results; draw(); };
     if (d.canEdit) {
       $('#dEdit').onclick = () => { editing = !editing; $('#dEdit').textContent = editing ? 'Done' : 'Edit'; $('#dEditBar').hidden = !editing; draw(); };
       $('#dName').onchange = (e) => { d.name = e.target.value; $('#dTitle').textContent = d.name; persist(); };
       $('#dAccess').onchange = (e) => { d.access.viewTags = [...e.target.selectedOptions].map(o => Number(o.value)); persist(); };
       $('#dAdd').onclick = () => editWidget(null);
-      $('#dDel').onclick = async () => { if (confirm(`Delete dashboard “${d.name}”?`)) { await FB.api.del('/admin/dashboards/' + d.id); FB.go('#/dashboards'); } };
+      FB.org.bar($('#dOrg'), d, {}, persist);
+      $('#dArchive').onclick = async () => { d.status = d.status === 'archived' ? 'active' : 'archived'; await persist(); FB.render(); };
+      $('#dDel').onclick = async () => { if (confirm(`Delete dashboard “${d.name}” for good? This cannot be undone.`)) { try { await FB.api.del('/admin/dashboards/' + d.id); FB.go('#/dashboards'); } catch (e) { toast(e.message, 'error'); } } };
     }
 
     function draw() {

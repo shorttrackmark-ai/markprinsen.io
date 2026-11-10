@@ -7,7 +7,7 @@ import { advance, startNode, mergeFormData } from './engine.js';
 export const DEMO_PASSWORD = 'demo1234';
 
 export async function seedDemo(db, admin) {
-  const M = { settings: [], persons: [], tags: [], person_tags: [], forms: [], flows: [], instances: [], tasks: [], submissions: [], events: [], dashboards: [] };
+  const M = { flow_versions: [], areas: [], settings: [], persons: [], tags: [], person_tags: [], forms: [], flows: [], instances: [], tasks: [], submissions: [], events: [], dashboards: [] };
   const nextId = {}; const id = (t) => (nextId[t] = (nextId[t] || 0) + 1);
   let clock = Date.now();
   const at = () => new Date(clock).toISOString().slice(0, 19).replace('T', ' ');
@@ -36,11 +36,18 @@ export async function seedDemo(db, admin) {
   person('eva', 'Eva Mulder', 'eva@example.com', demoHash, false, ['Function:Finance', 'Department:Finance', 'Location:Amsterdam']);
   const D = makeDirectory(M.persons, M.tags, M.person_tags);
 
+  // ---- areas: how everything is grouped (a department or domain that offers processes to the rest) ----
+  const A = {};
+  const area = (key, name, description, owner, color) => { const aid = id('areas'); M.areas.push({ id: aid, name, description, color, owner_id: P[owner], created_at: at() }); A[key] = aid; };
+  area('hr', 'People & HR', 'Leave, onboarding and everything about our people.', 'admin', '#7c3aed');
+  area('fin', 'Purchasing & Finance', 'Buying, suppliers and payments.', 'eva', '#0891b2');
+  area('ops', 'Operations & Quality', 'Incidents, corrective actions and day-to-day operations.', 'daan', '#ea580c');
+
   // ---- forms ----
   const forms = new Map();
   const form = (name, description, fields, extra = {}) => {
     const fid = id('forms');
-    const f = { id: fid, name, slug: slugify(name), description, fields, checks: extra.checks || [], access: extra.access || {}, updated_at: at() };
+    const f = { id: fid, name, slug: slugify(name), description, fields, checks: extra.checks || [], access: extra.access || {}, area_id: null, status: 'active', owner_id: P.admin, updated_at: at() };
     M.forms.push(f); forms.set(fid, f);
     return fid;
   };
@@ -105,7 +112,7 @@ export async function seedDemo(db, admin) {
 
   // ---- flows (with handbook documentation) ----
   const flows = new Map();
-  const flow = (name, description, doc, graph) => { const fid = id('flows'); const f = { id: fid, name, description, doc, graph, version: 1, updated_at: at() }; M.flows.push(f); flows.set(fid, f); return fid; };
+  const flow = (name, description, doc, graph) => { const fid = id('flows'); const f = { id: fid, name, description, doc, graph, version: 1, area_id: null, status: 'active', owner_id: null, review_months: 12, reviewed_at: at(), updated_at: at() }; M.flows.push(f); flows.set(fid, f); return fid; };
   const mgrSameDept = { type: 'tags', tagIds: [T['Function:Manager']], sameAs: ['Department'] };
 
   const leaveFlow = flow('Leave request', 'Ask for days off; long leave goes to your own manager.',
@@ -291,18 +298,28 @@ export async function seedDemo(db, admin) {
   ]) });
   M.settings.push({ key: 'demo', value: '1' });
 
+  // ---- who owns what, and in which area ----
+  const FORM_AREA = { 'Supplier': 'fin', 'Leave request': 'hr', 'Approval': 'fin', 'Purchase request': 'fin', 'Order register': 'fin', 'Incident report': 'ops', 'Corrective action': 'ops' };
+  const FLOW_AREA = { 'Leave request': ['hr', 'admin'], 'Purchase request': ['fin', 'eva'], 'Incident & corrective action': ['ops', 'daan'] };
+  for (const f of M.forms) f.area_id = A[FORM_AREA[f.name]] || null;
+  for (const f of M.flows) { const m = FLOW_AREA[f.name]; if (m) { f.area_id = A[m[0]]; f.owner_id = P[m[1]]; } }
+  for (const f of M.flows) M.flow_versions.push({ id: id('flow_versions'), flow_id: f.id, version: 1, name: f.name, graph: f.graph, doc: f.doc, saved_at: at(), saved_by: P.admin });
+  for (const d of M.dashboards) { d.area_id = A.ops; d.status = 'active'; d.owner_id = P.daan; }
+
   // ---- write everything ----
   const enc = (v) => (v && typeof v === 'object' ? JSON.stringify(v) : v);
   const COLS = {
     settings: ['key', 'value'], persons: ['id', 'name', 'email', 'pw_hash', 'is_admin', 'active', 'created_at'],
     tags: ['id', 'category', 'value'], person_tags: ['person_id', 'tag_id'],
-    forms: ['id', 'name', 'slug', 'description', 'fields', 'checks', 'access', 'updated_at'],
-    flows: ['id', 'name', 'description', 'graph', 'doc', 'version', 'updated_at'],
+    areas: ['id', 'name', 'description', 'color', 'owner_id', 'created_at'],
+    forms: ['id', 'name', 'slug', 'description', 'fields', 'checks', 'access', 'area_id', 'status', 'owner_id', 'updated_at'],
+    flows: ['id', 'name', 'description', 'graph', 'doc', 'version', 'area_id', 'status', 'owner_id', 'review_months', 'reviewed_at', 'updated_at'],
     instances: ['id', 'flow_id', 'flow_version', 'graph', 'title', 'status', 'vars', 'started_by', 'created_at', 'finished_at'],
     tasks: ['id', 'instance_id', 'node_id', 'name', 'form_id', 'assignee', 'status', 'due_at', 'completed_by', 'submission_id', 'created_at', 'completed_at'],
     submissions: ['id', 'form_id', 'person_id', 'instance_id', 'task_id', 'data', 'created_at', 'updated_at'],
     events: ['id', 'instance_id', 'person_id', 'message', 'created_at'],
-    dashboards: ['id', 'name', 'widgets', 'access', 'updated_at'],
+    flow_versions: ['id', 'flow_id', 'version', 'name', 'graph', 'doc', 'saved_at', 'saved_by'],
+    dashboards: ['id', 'name', 'widgets', 'access', 'area_id', 'status', 'owner_id', 'updated_at'],
   };
   const stmts = [];
   for (const [table, cols] of Object.entries(COLS)) {

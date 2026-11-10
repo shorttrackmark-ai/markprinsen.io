@@ -151,7 +151,7 @@
         if (n.type !== 'end' && !out.length) errs.push(`“${n.name}” has no outgoing arrow.`);
         if (n.type !== 'start' && !g.edges.some(e => e.to === n.id)) errs.push(`“${n.name}” can never be reached.`);
         if (n.type === 'task' && !n.formId) errs.push(`Task “${n.name}” has no form.`);
-        if (n.type === 'task' && known && n.formId && !known.has(Number(n.formId))) errs.push(`Task “${n.name}” uses a form that no longer exists.`);
+        if (n.type === 'task' && known && n.formId && !known.has(Number(n.formId))) errs.push(`Task “${n.name}” uses a form that no longer exists or is archived.`);
         if (n.type === 'record' && !n.formId) errs.push(`Record step “${n.name}” has no form.`);
         if (n.type === 'record' && n.mode === 'update' && !n.recordId) errs.push(`Record step “${n.name}” needs the id of the record to update.`);
         if (n.type === 'webhook' && !/^https:\/\//.test(n.url || '')) errs.push(`Webhook “${n.name}” needs an https:// address.`);
