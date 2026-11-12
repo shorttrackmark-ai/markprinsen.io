@@ -645,3 +645,7 @@ table.register td a:hover { text-decoration: underline; }
 .ai-step textarea { font-size: 13px; }
 .ai-outline { margin: 4px 0 12px; padding-left: 22px; display: grid; gap: 4px; }
 #aiResult h4 { margin: 14px 0 6px; }
+
+/* templates */
+.tpl-card { display: flex; flex-direction: column; }
+.tpl-card .row-actions { margin-top: auto; padding-top: 10px; }

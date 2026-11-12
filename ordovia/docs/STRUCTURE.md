@@ -67,3 +67,6 @@ No AI service and no key: Build › Describe with AI. The user describes a proce
 
 ## Governance: everything has a home (built)
 New forms start as drafts. Forms, processes and documents cannot become active without an area (409 "Choose an area first…"); documents need an area from the start. Health now also finds: person-attribute rules nobody satisfies, documents linked to nothing, classes without objects or processes, processes unused for six months (archive?), and near-duplicate names of processes, forms and documents.
+
+## Templates (built)
+Build › Templates: 11 ready-made processes in five packs (Health & safety: incident & corrective action, safety inspection, risk assessment, toolbox talk; People: leave, onboarding; Purchasing & finance: purchase request; Quality & equipment: machine calibration (with a Machine class), supplier approval; IT: access request). `src/templates.js`; each template is a bundle (the same format as "Describe with AI"), so it goes through the same checks and `applyPlan`: added as drafts in the chosen area, existing forms reused, missing tags created (Health reminds that nobody has them yet). test/templates.test.js verifies every template is valid, fully reachable and starts without getting stuck.

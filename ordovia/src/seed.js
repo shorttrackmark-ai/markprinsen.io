@@ -127,7 +127,7 @@ export async function seedDemo(db, admin, bucket) {
     { key: 'name', label: 'Name', type: 'text', required: true },
     { key: 'machine_id', label: 'Machine number', type: 'text', required: true, width: 'half', format: 'code' },
     { key: 'location', label: 'Location', type: 'select', options: ['Hall A', 'Workshop', 'Quality lab', 'Warehouse'], required: true, width: 'half' },
-    { key: 'status', label: 'Status', type: 'select', options: ['In service', 'Out of service'], required: true, default: 'In service', width: 'half' },
+    { key: 'status', label: 'Status', type: 'select', options: ['In service', 'Out of service'], required: true, default: '"In service"', width: 'half' },
     { key: 'interval_days', label: 'Calibration interval (days)', type: 'number', required: true, min: 1, default: '365', width: 'half' },
     { key: 'last_calibrated', label: 'Last calibrated', type: 'date', width: 'half' },
     { key: 'next_due', label: 'Next calibration due', type: 'date', width: 'half' },

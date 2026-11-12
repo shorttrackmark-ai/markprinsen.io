@@ -10,6 +10,7 @@ import {
 } from './lib.js';
 import { advance, startNode, mergeFormData } from './engine.js';
 import { extractJSON, planBundle, resolve, FIELD_TYPES } from './bundle.js';
+import { TEMPLATES, PACKS } from './templates.js';
 import { seedDemo, resetDemo, DEMO_ADMIN, DEMO_PASSWORD } from './seed.js';
 
 const SESSION_DAYS = 14;
@@ -1556,28 +1557,27 @@ async function checkBundle(c, text) {
   try { obj = extractJSON(text); } catch (e) { return { errors: [e.message], warnings: [], plan: null }; }
   return planBundle(obj, await aiContext(c));
 }
-route('POST', '/api/admin/ai/preview', async (c) => {
-  const D = await c.dir();
-  const { errors, warnings, plan } = await checkBundle(c, (await c.body()).text);
-  if (!plan) return { ok: false, errors, warnings };
+/** What a plan would create, in words a person can read. */
+function summarize(plan, D, warnings) {
   return { ok: true, errors: [], warnings, summary: {
     area: plan.area ? { name: plan.area.name, isNew: !plan.area.id } : null, tags: plan.tags, usedForms: plan.usedForms,
     forms: plan.forms.map(f => ({ name: f.name, fields: f.fields.length, isClass: f.is_class })),
     flows: plan.flows.map(fl => ({ name: fl.name, description: fl.description, steps: fl.graph.nodes.filter(n => n.type !== 'start').map(n => ({ name: n.name, type: n.type === 'action' ? 'calc' : n.type, who: n.assignee ? (n.assignee.type === 'tags' ? n.assignee._tags.join(' + ') + ((n.assignee.sameAs || []).length ? ' (same ' + n.assignee.sameAs.join(', ') + ' as initiator)' : '') : D.describe(n.assignee)) : '', form: n._form || '' })) })) } };
-}, { admin: true });
-route('POST', '/api/admin/ai/apply', async (c) => {
+}
+route('POST', '/api/admin/ai/preview', async (c) => {
   const D = await c.dir();
-  const { errors, plan } = await checkBundle(c, (await c.body()).text);
-  if (!plan) throw new HttpError(422, errors[0] || 'The answer cannot be used', { errors });
-  // area
+  const { errors, warnings, plan } = await checkBundle(c, (await c.body()).text);
+  return plan ? summarize(plan, D, warnings) : { ok: false, errors, warnings };
+}, { admin: true });
+
+/** Create what a checked plan describes, all as drafts: area, tags, forms (shells first so they can link to each other), processes. */
+async function applyPlan(c, plan, what) {
+  const D = await c.dir();
   let areaId = null;
   if (plan.area) areaId = plan.area.id || await run(c.db, 'INSERT INTO areas(name, description, color, created_at) VALUES (?,?,?,?)', plan.area.name, '', '#3d5a80', now());
-  // tags
   const tagIds = new Map([...D.tags.values()].map(t => [(t.category + ': ' + t.value).toLowerCase(), t.id]));
   for (const t of plan.tags) tagIds.set((t.category + ': ' + t.value).toLowerCase(), await run(c.db, 'INSERT INTO tags(category, value) VALUES (?,?)', t.category, t.value));
-  // forms: first the empty shells (so forms can link to each other), then their fields
-  const all_ = await c.forms();
-  const formIds = new Map(all_.filter(f => f.status !== 'archived').map(f => [f.name.toLowerCase(), f.id]));
+  const formIds = new Map((await c.forms()).filter(f => f.status !== 'archived').map(f => [f.name.toLowerCase(), f.id]));
   const made = [];
   for (const f of plan.forms) {
     let slug = f.slug, n = 2;
@@ -1597,6 +1597,32 @@ route('POST', '/api/admin/ai/apply', async (c) => {
     await snapshotFlow(c, { id: fid, name: fl.name, graph, doc: JSON.stringify(fl.doc), version: 1 });
     flows.push({ id: fid, name: fl.name });
   }
-  c.note('Created from an AI answer', [flows.map(f => 'process ' + f.name), made.map(f => 'form ' + f.name)].flat().join(', '));
+  c.note('Created from ' + what, [flows.map(f => 'process ' + f.name), made.map(f => 'form ' + f.name)].flat().join(', '));
   return { flows, forms: made.map(f => ({ id: f.id, name: f.name })) };
+}
+route('POST', '/api/admin/ai/apply', async (c) => {
+  const { errors, plan } = await checkBundle(c, (await c.body()).text);
+  if (!plan) throw new HttpError(422, errors[0] || 'The answer cannot be used', { errors });
+  return applyPlan(c, plan, 'an AI answer');
 }, { admin: true });
+
+// ---------------------------------------------------------------- templates: ready-made processes, added as drafts
+const templateOf = (id) => { const t = TEMPLATES.find(x => x.id === id); if (!t) throw new HttpError(404, 'Template not found'); return t; };
+const templateBundle = (t, area) => ({ ...JSON.parse(JSON.stringify(t.bundle)), area: String(area || t.area || '').trim() || undefined });
+route('GET', '/api/admin/templates', async (c) => {
+  const ctx = await aiContext(c);
+  const have = new Set(ctx.flows.map(f => f.name.toLowerCase()));
+  return { packs: PACKS, areas: ctx.areas.map(a => a.name), templates: TEMPLATES.map(t => ({ id: t.id, pack: t.pack, name: t.name, summary: t.summary, area: t.area, forms: t.bundle.forms.map(f => f.name), steps: t.bundle.processes[0].steps.length, added: have.has(t.bundle.processes[0].name.toLowerCase()) })) };
+}, { admin: true });
+route('POST', '/api/admin/templates/:id/preview', async (c, { id }) => {
+  const t = templateOf(id), D = await c.dir();
+  const { errors, warnings, plan } = planBundle(templateBundle(t, (await c.body()).area), await aiContext(c));
+  return plan ? summarize(plan, D, warnings) : { ok: false, errors, warnings };
+}, { admin: true });
+route('POST', '/api/admin/templates/:id/apply', async (c, { id }) => {
+  const t = templateOf(id);
+  const { errors, plan } = planBundle(templateBundle(t, (await c.body()).area), await aiContext(c));
+  if (!plan) throw new HttpError(422, errors[0] || 'This template cannot be added', { errors });
+  return applyPlan(c, plan, 'template ' + t.name);
+}, { admin: true });
+

@@ -302,6 +302,20 @@ console.log('governance: everything has a home');
   ok(hi.some(i => i.kind === 'unused' && /Unused class/.test(i.title)), 'Health notices a class nobody uses');
 }
 
+console.log('templates');
+{
+  r = await get('/api/admin/templates'); ok(r.data.packs.includes('Health & safety') && r.data.templates.length >= 10 && r.data.templates.every(t => t.steps > 0), 'the template library lists ready-made processes by pack');
+  const inc = r.data.templates.find(t => t.id === 'incident');
+  r = await post('/api/admin/templates/incident/preview', { area: 'Health & Safety' }); ok(r.data.ok && r.data.summary.area.isNew && r.data.summary.forms.length === 1 && r.data.summary.usedForms.includes('Incident report') && r.data.summary.tags.some(t => t.value === 'Safety officer'), 'preview shows what a template adds (new area and form, existing forms reused, tags to hand out)', r.data.summary);
+  r = await post('/api/admin/templates/incident/apply', { area: 'Health & Safety' }); ok(r.status === 200 && r.data.flows.length === 1 && r.data.forms.length === 1, 'add the incident template (the demo already has two of its forms)', r.data); const tid = r.data.flows[0].id;
+  r = await get('/api/admin/flows/' + tid); ok(r.data.status === 'draft' && r.data.issues.length === 0 && r.data.area_id, 'it is a draft in its own area without issues', r.data.issues);
+  r = await get('/api/admin/templates'); ok(r.data.templates.find(t => t.id === 'incident').added === true, 'the library shows it as added');
+  r = await get('/api/admin/health'); ok(r.data.items.some(i => i.kind === 'routing' && /Incident report & corrective action/.test(i.title)), 'Health reminds that nobody has the new Safety officer tag yet', r.data.items.filter(i => i.kind === 'routing').map(i => i.title));
+  r = await post('/api/admin/templates/nope/apply', {}); ok(r.status === 404, 'unknown template');
+  // all templates can be added to a workspace
+  for (const t of (await get('/api/admin/templates')).data.templates) { if (t.id === 'incident') continue; const x = await post('/api/admin/templates/' + t.id + '/apply', {}); ok(x.status === 200, 'template ' + t.id + ' can be added', x.data); }
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');
