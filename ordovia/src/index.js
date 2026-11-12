@@ -386,6 +386,7 @@ route('GET', '/api/tasks/:id', async (c, { id }) => {
   return {
     task: { id: t.id, name: t.name, status: t.status, form_id: t.form_id, created_at: t.created_at, due_at: t.due_at, completed_at: t.completed_at, instance_id: t.iid, process: t.process },
     instructions: node.instructions || '',
+    round: (await first(c.db, 'SELECT count(*) AS n FROM tasks WHERE instance_id = ? AND node_id = ? AND id < ?', t.iid, t.node_id, t.id)).n + 1,
     afterwards: t.status === 'open' ? afterwards(parse(t.graph, { nodes: [], edges: [] }), t.node_id, D) : '',
     case: { id: t.iid, title: t.process, starter: t.starter || '', started_at: t.started_at },
     documents: await docsByIds(c, node.docIds, node.docSections || {}),
@@ -1710,7 +1711,12 @@ route('GET', '/api/flows/:id/insight', async (c, { id }) => {
   const monthKey = (d) => d.toISOString().slice(0, 7), months = [];
   for (let k = 5; k >= 0; k--) { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - k); months.push({ month: monthKey(d), cases: 0 }); }
   for (const i of inst) { const m = months.find(x => x.month === String(i.created_at).slice(0, 7)); if (m) m.cases++; }
-  const tasks = await all(c.db, 'SELECT t.node_id, t.name, t.status, t.created_at, t.completed_at, t.due_at FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE i.flow_id = ? LIMIT 20000', f.id);
+  const tasks = await all(c.db, 'SELECT t.node_id, t.name, t.status, t.created_at, t.completed_at, t.due_at, t.instance_id FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE i.flow_id = ? LIMIT 20000', f.id);
+  // a step that appears more than once in a case was done again: the information came back for correction
+  const perCase = new Map();
+  for (const t of tasks) { const k = t.instance_id + ':' + t.node_id; perCase.set(k, (perCase.get(k) || 0) + 1); }
+  const again = new Map(), casesAgain = new Set();
+  for (const [k, n] of perCase) if (n > 1) { const [iid, nid] = k.split(':'); again.set(nid, (again.get(nid) || 0) + n - 1); casesAgain.add(iid); }
   const nowIso = now(), steps = new Map();
   for (const t of tasks) {
     const s = steps.get(t.node_id) || { node_id: t.node_id, name: t.name, done: 0, open: 0, waits: [], late: 0, openLate: 0 };
@@ -1718,13 +1724,13 @@ route('GET', '/api/flows/:id/insight', async (c, { id }) => {
     else if (t.status === 'open') { s.open++; if (t.due_at && t.due_at < nowIso) s.openLate++; }
     steps.set(t.node_id, s);
   }
-  const stepList = [...steps.values()].map(s => ({ node_id: s.node_id, name: s.name, done: s.done, open: s.open, avgHours: r1(s.waits.length ? s.waits.reduce((a, b) => a + b, 0) / s.waits.length : null), maxHours: r1(s.waits.length ? Math.max(...s.waits) : null), late: s.late + s.openLate, lateRate: s.done + s.open ? Math.round(100 * (s.late + s.openLate) / (s.done + s.open)) : 0 }))
+  const stepList = [...steps.values()].map(s => ({ node_id: s.node_id, name: s.name, done: s.done, open: s.open, avgHours: r1(s.waits.length ? s.waits.reduce((a, b) => a + b, 0) / s.waits.length : null), maxHours: r1(s.waits.length ? Math.max(...s.waits) : null), again: again.get(s.node_id) || 0, late: s.late + s.openLate, lateRate: s.done + s.open ? Math.round(100 * (s.late + s.openLate) / (s.done + s.open)) : 0 }))
     .sort((a, b) => (b.avgHours || 0) - (a.avgHours || 0));
   const totalTasks = stepList.reduce((a, s) => a + s.done + s.open, 0), lateTasks = stepList.reduce((a, s) => a + s.late, 0);
   return { name: f.name, runs: { total: inst.length, running: inst.filter(i => i.status === 'running').length, done: done.length, stuck: inst.filter(i => i.status === 'stuck').length },
     cycle: { avgHours: r1(cyc.length ? cyc.reduce((a, b) => a + b, 0) / cyc.length : null), medianHours: r1(at(0.5)), p90Hours: r1(at(0.9)), fastestHours: r1(cyc[0]), slowestHours: r1(cyc[cyc.length - 1]) },
     outcomes: [...outcomes.entries()].map(([name, n]) => ({ name, n, pct: Math.round(100 * n / Math.max(1, done.length)) })).sort((a, b) => b.n - a.n),
-    months, steps: stepList, lateRate: totalTasks ? Math.round(100 * lateTasks / totalTasks) : 0, based: done.length };
+    months, steps: stepList, casesAgain: casesAgain.size, lateRate: totalTasks ? Math.round(100 * lateTasks / totalTasks) : 0, based: done.length };
 });
 
 // ---------------------------------------------------------------- transparency: what Ordovia has recorded about you (and nobody else's data)

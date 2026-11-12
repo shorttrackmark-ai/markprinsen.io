@@ -138,7 +138,7 @@ export const TEMPLATES = [
           { id: 'done', type: 'end', name: 'Onboarded' }] }] } },
 
   // ------------------------------------------------------------------ purchasing & finance
-  { id: 'purchase', pack: 'Purchasing & finance', name: 'Purchase request', summary: 'Above 250 the manager approves, above 1,000 Finance approves as well.', area: 'Purchasing & Finance',
+  { id: 'purchase', pack: 'Purchasing & finance', name: 'Purchase request', summary: 'Above 250 the manager approves, above 1,000 Finance approves as well. A reviewer can send a request back for correction; it returns to the requester with the earlier answers filled in.', area: 'Purchasing & Finance',
     bundle: { forms: [{ name: 'Purchase request', fields: [
       { key: 'item', label: 'What do you need?', type: 'text', required: true },
       { key: 'supplier', label: 'Supplier', type: 'text', required: true, width: 'half' },
@@ -146,15 +146,19 @@ export const TEMPLATES = [
       { key: 'quantity', label: 'Quantity', type: 'number', min: 1, default: '1', required: true, width: 'half' },
       { key: 'unit_price', label: 'Unit price (excl. VAT)', type: 'number', min: 0, required: true, width: 'half' },
       { key: 'total', label: 'Total excl. VAT', type: 'calc', formula: 'quantity * unit_price', decimals: 2 },
-      { key: 'reason', label: 'Why is it needed?', type: 'textarea', required: true }] }, approval],
+      { key: 'reason', label: 'Why is it needed?', type: 'textarea', required: true }] },
+      { name: 'Review decision', description: 'Approve, send back for correction, or reject.', fields: [
+        { key: 'decision', label: 'Decision', type: 'radio', options: ['Approve', 'Needs correction', 'Reject'], required: true },
+        { key: 'comment', label: 'Reason', type: 'textarea', required: true, visibleIf: 'decision != "Approve"', help: 'Say exactly what has to change, so the requester can correct it in one go.' }] }],
       processes: [{ name: 'Purchase request', description: 'Order goods or services.', purpose: 'Control spending: every purchase approved by the right person.', owner_role: 'Finance', scope: 'All purchases from suppliers', records: 'Kept for 7 years',
         request_form: 'Purchase request', title: '"Purchase: " & item & " (" & ROUND(total, 0) & ")"',
         steps: [
           { id: 'small', type: 'decision', name: 'Above 250?', branches: [{ label: 'Yes', when: 'total > 250', to: 'mgr' }, { label: 'No', to: 'ok' }] },
-          { id: 'mgr', type: 'task', name: 'Manager approval', form: 'Approval decision', who: { type: 'tags', tags: ['Function: Manager'], same_as_initiator: ['Department'] }, due_hours: 48, next: 'v1' },
-          { id: 'v1', type: 'decision', name: 'Approved and above 1,000?', branches: [{ label: 'Yes', when: 'decision == "Approve" and total > 1000', to: 'fin' }, { label: 'Approved', when: 'decision == "Approve"', to: 'ok' }, { label: 'No', to: 'no' }] },
-          { id: 'fin', type: 'task', name: 'Finance approval', form: 'Approval decision', who: { type: 'tags', tags: ['Function: Finance'] }, due_hours: 72, next: 'v2' },
-          { id: 'v2', type: 'decision', name: 'Finance approved?', branches: [{ label: 'Yes', when: 'decision == "Approve"', to: 'ok' }, { label: 'No', to: 'no' }] },
+          { id: 'mgr', type: 'task', name: 'Manager approval', form: 'Review decision', who: { type: 'tags', tags: ['Function: Manager'], same_as_initiator: ['Department'] }, due_hours: 48, next: 'v1' },
+          { id: 'v1', type: 'decision', name: 'Manager decision', branches: [{ label: 'Needs correction', when: 'decision == "Needs correction"', to: 'fix' }, { label: 'Approved, above 1,000', when: 'decision == "Approve" and total > 1000', to: 'fin' }, { label: 'Approved', when: 'decision == "Approve"', to: 'ok' }, { label: 'Rejected', to: 'no' }] },
+          { id: 'fix', type: 'task', name: 'Correct the request', form: 'Purchase request', who: 'initiator', due_hours: 72, instructions: 'Read the reason in the earlier steps, correct the request and send it on. Your earlier answers are filled in.', next: 'small' },
+          { id: 'fin', type: 'task', name: 'Finance approval', form: 'Review decision', who: { type: 'tags', tags: ['Function: Finance'] }, due_hours: 72, next: 'v2' },
+          { id: 'v2', type: 'decision', name: 'Finance decision', branches: [{ label: 'Needs correction', when: 'decision == "Needs correction"', to: 'fix' }, { label: 'Approved', when: 'decision == "Approve"', to: 'ok' }, { label: 'Rejected', to: 'no' }] },
           { id: 'ok', type: 'end', name: 'Approved' }, { id: 'no', type: 'end', name: 'Rejected' }] }] } },
 
   // ------------------------------------------------------------------ quality & equipment

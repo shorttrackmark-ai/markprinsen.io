@@ -407,6 +407,39 @@ console.log('transparency: what Ordovia knows about me');
   cookie = adminCookie;
 }
 
+console.log('corrections as a route in the process');
+{
+  const adminCookie = cookie;
+  const login = async (email) => { cookie = ''; const x = await post('/api/login', { email, password: 'demo1234' }); return x.status === 200; };
+  const bundle = { area: 'People & HR',
+    forms: [{ name: 'Gear request', fields: [{ key: 'gear', label: 'What do you need?', type: 'text', required: true }, { key: 'qty', label: 'How many?', type: 'number', required: true, min: 1 }] },
+      { name: 'Gear review', fields: [{ key: 'verdict', label: 'Decision', type: 'radio', options: ['Approve', 'Needs correction'], required: true }, { key: 'why', label: 'Reason', type: 'textarea', required: true, visibleIf: 'verdict == "Needs correction"' }] }],
+    processes: [{ name: 'Gear request flow', request_form: 'Gear request', steps: [
+      { id: 'rev', type: 'task', name: 'Review the gear request', form: 'Gear review', who: { type: 'tags', tags: ['Function: Manager'], same_as_initiator: ['Department'] }, next: 'dec' },
+      { id: 'dec', type: 'decision', name: 'Decision', branches: [{ label: 'Back', when: 'verdict == "Needs correction"', to: 'fix' }, { label: 'OK', to: 'ok' }] },
+      { id: 'fix', type: 'task', name: 'Correct the request', form: 'Gear request', who: 'initiator', next: 'rev' },
+      { id: 'ok', type: 'end', name: 'Approved' }] }] };
+  const text = JSON.stringify(bundle);
+  r = await post('/api/admin/ai/apply', { text }); ok(r.status === 200, 'a process with a correction loop is accepted', r.data); const cf = r.data.flows[0].id;
+  for (const f of r.data.forms) { const full = (await get('/api/admin/forms/' + f.id)).data.form; await put('/api/admin/forms/' + f.id, { name: full.name, description: '', fields: full.fields, checks: [], access: { direct: false }, status: 'active', area_id: full.area_id }); }
+  { const fl = (await get('/api/admin/flows/' + cf)).data; r = await put('/api/admin/flows/' + cf, { name: fl.name, description: '', graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 200 && r.data.status === 'active', 'activate it', r.data.issues); }
+  r = await post('/api/flows/' + cf + '/start', { data: { gear: 'Helmet', qty: 3 } }); const cid = r.data.instanceId;
+  await login('daan@example.com');
+  let mt = (await get('/api/home')).data.tasks.find(t => t.instance_id === cid); ok(mt, 'the manager gets the review');
+  r = await get('/api/tasks/' + mt.id); ok(r.data.round === 1, 'first round');
+  r = await post('/api/tasks/' + mt.id + '/complete', { data: { verdict: 'Needs correction', why: 'Quantity must be a multiple of 5' } }); ok(r.status === 200, 'the manager sends it back with a reason');
+  cookie = adminCookie;
+  const ins = (await get('/api/instances/' + cid)).data; const fixT = ins.tasks.find(t => t.name === 'Correct the request' && t.status === 'open'); ok(fixT, 'the requester gets a correction task');
+  r = await post('/api/tasks/' + fixT.id + '/complete', { data: { gear: 'Helmet', qty: 5 } }); ok(r.status === 200, 'the requester corrects it');
+  await login('daan@example.com');
+  mt = (await get('/api/home')).data.tasks.find(t => t.instance_id === cid && t.name === 'Review the gear request'); ok(mt, 'the review comes back to the manager');
+  r = await get('/api/tasks/' + mt.id); ok(r.data.round === 2, 'as round 2 (the page says the step came back)', r.data.round);
+  r = await post('/api/tasks/' + mt.id + '/complete', { data: { verdict: 'Approve' } }); ok(r.status === 200, 'the manager approves');
+  cookie = adminCookie;
+  r = await get('/api/instances/' + cid); ok(r.data.instance.status === 'done' && r.data.instance.outcome === 'Approved', 'the case ends as Approved after one correction', r.data.instance);
+  r = await get('/api/flows/' + cf + '/insight'); const rv = r.data.steps.find(s => s.name === 'Review the gear request'); ok(rv && rv.again === 1 && r.data.casesAgain === 1, 'Performance shows the step was done again once, and one case came back (per step, not per person)', r.data.steps);
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');

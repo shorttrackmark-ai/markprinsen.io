@@ -171,6 +171,7 @@
     const t = d.task, form = t.form_id ? formById(t.form_id) : null;
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/processes/${t.instance_id}">← ${esc(t.process)}</a><h1>${esc(t.name)}</h1>
       <p class="muted small">${t.status === 'open' && t.due_at ? `<span class="${t.due_at < new Date().toISOString().slice(0, 19).replace('T', ' ') ? 'danger-text' : ''}">${esc(dueText(t.due_at))}</span> · ` : ''}for ${d.canComplete ? 'you' : esc(d.assignee)}</p></div><div class="actions">${d.canReassign ? '<button class="btn small" id="reassign">Reassign…</button>' : ''}<span class="status s-${esc(t.status)}">${esc(t.status)}</span></div></div>
+      ${t.status === 'open' && d.round > 1 ? `<div class="card instructions"><b>This step came back (round ${d.round}).</b> Your earlier answers are filled in. See the reason in the earlier steps on the right, correct what is needed and send it on.</div>` : ''}
       ${d.escalated && t.status === 'open' ? '<div class="card instructions escalated"><b>This task is overdue.</b> It was also handed to the process owner, who can complete or reassign it.</div>' : ''}
       ${d.instructions ? `<div class="card instructions"><h4>Work instruction</h4><p>${richText(d.instructions)}</p></div>` : ''}
       ${(d.documents || []).length ? `<div class="card instructions"><h4>Documents for this step</h4>${FB.org.docLinks(d.documents)}</div>` : ''}
@@ -199,7 +200,8 @@
     for (const s of d.previous) {
       const pf = formById(s.form_id); if (!pf) continue;
       for (const f of form.fields) {
-        if (f.prefill === false || (f.prefill !== true && !SIMPLE.includes(f.type))) continue;
+        const again = s.form_id === form.id && !['calc', 'heading', 'file'].includes(f.type);   // the same form comes back: every earlier answer is kept
+        if (f.prefill === false || (f.prefill !== true && !again && !SIMPLE.includes(f.type))) continue;
         const src = pf.fields.find(x => x.key === f.key && x.type === f.type), v = s.data[f.key];
         if (src && v != null && v !== '') prefill[f.key] = { value: v, label: s.data[f.key + '_label'], from: s.task_name || pf.name };
       }

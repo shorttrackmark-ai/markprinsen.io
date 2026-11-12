@@ -67,6 +67,7 @@ Field keys are the variable names (e.g. days > 3). Text in double quotes; join t
 
 == RULES ==
 - Keep it small and practical: only the forms and fields people really need; short step names. Do not invent webhook or integration steps.
+- If a reviewer may need to send work back, do not invent questions or messages: add a decision branch "Needs correction" that leads to a task for the person who started it (same form as the request, with its earlier answers) and then back to the review step. The reviewer's form should have the choice and a required reason.
 - Every step except an end needs "next" (or branches). Every path must reach an end. Use clear outcomes for the end steps.
 - Reuse the existing forms listed below by name instead of defining them again (leave them out of "forms").
 - Write names, labels and instructions in the same language as my description.

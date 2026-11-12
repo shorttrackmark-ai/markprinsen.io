@@ -92,3 +92,6 @@ Core principle: a form is both the process step and the information (completing 
 
 ## Enter once (built)
 A task's form takes over what an earlier step of the same case already collected: fields with the same key and type, for simple types (text, number, date, e-mail, choice, person, record). They show "Taken over from “<step>”. Change it if it is not right." Yes/no, radio and long-text answers stay empty by default (a second approval must not inherit the first decision). Per field the builder can choose Automatic, Always or Never ("Take over from earlier steps"). Later answers win over earlier ones; a take-over wins over a default value.
+
+## Corrections as an ordinary route (built)
+No messaging: if a reviewer must send work back, the process has a "Needs correction" branch (reason required) that loops to a task for the requester (the same form, all earlier answers filled in) and back to the review. The task page says "This step came back (round N)". Performance counts, per step and never per person, how often a step was done again and how many cases came back ("Done again"); a step that shows it often points to a form or instructions to improve. The Purchase request template and the AI prompt use the pattern.
