@@ -60,9 +60,9 @@
       let input;
       switch (f.type) {
         case 'heading': return `<div class="ff-heading" data-key="${esc(f.key)}"><h3>${esc(f.label)}</h3>${help}</div>`;
-        case 'textarea': input = `<textarea id="${id}" name="${esc(f.key)}" rows="3" ${dis} placeholder="${esc(f.placeholder || '')}">${esc(v ?? '')}</textarea>`; break;
+        case 'textarea': input = `<textarea id="${id}" name="${esc(f.key)}" rows="3" ${dis} ${attr('maxlength', f.maxLength)} placeholder="${esc(f.placeholder || '')}">${esc(v ?? '')}</textarea>`; break;
         case 'number': input = `<input id="${id}" name="${esc(f.key)}" type="number" step="any" ${attr('min', f.min)} ${attr('max', f.max)} value="${esc(v ?? '')}" ${dis}>`; break;
-        case 'email': case 'date': case 'text': input = `<input id="${id}" name="${esc(f.key)}" type="${f.type}" value="${esc(v ?? '')}" ${dis} placeholder="${esc(f.placeholder || '')}">`; break;
+        case 'email': case 'date': case 'text': input = `<input id="${id}" name="${esc(f.key)}" type="${f.type}" value="${esc(v ?? '')}" ${dis} placeholder="${esc(f.placeholder || '')}" ${f.type !== 'date' ? attr('maxlength', f.maxLength) : ''}>`; break;
         case 'select': input = `<select id="${id}" name="${esc(f.key)}" ${dis}><option value="">— choose —</option>${(f.options || []).map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`; break;
         case 'radio': input = `<div class="radios">${(f.options || []).map(o => `<label class="radio"><input type="radio" name="${esc(f.key)}" value="${esc(o)}" ${o === v ? 'checked' : ''} ${dis}><span>${esc(o)}</span></label>`).join('')}</div>`; break;
         case 'checkbox': input = `<label class="check"><input id="${id}" type="checkbox" name="${esc(f.key)}" ${v ? 'checked' : ''} ${dis}><span>${esc(f.checkLabel || 'Yes')}</span></label>`; break;
@@ -313,6 +313,9 @@
           <label class="check"><input type="checkbox" data-p="integer" ${f.integer ? 'checked' : ''}><span>Whole numbers only</span></label>` : ''}
         ${f.type === 'text' ? `<label>Format <small class="muted">(checked, and written in one standard way)</small><select data-p="format"><option value="">Free text</option>${Object.entries(FB.logic.FORMATS).map(([k, x]) => `<option value="${k}" ${f.format === k ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></label>
           ${f.format ? '' : `<label>Required pattern <small class="muted">(regular expression, optional)</small><input data-p="pattern" class="mono" value="${esc(f.pattern || '')}" placeholder="e.g. ^[A-Z]{3}-[0-9]{4}$"></label>${f.pattern ? `<label>Message when it does not match<input data-p="patternMsg" value="${esc(f.patternMsg || '')}" placeholder="e.g. Use three letters, a dash and four digits"></label>` : ''}`}` : ''}
+        ${['text', 'textarea', 'email'].includes(f.type) ? `<div class="row2"><label>Minimum length <small class="muted">(characters)</small><input type="number" min="0" data-p="minLength" value="${esc(f.minLength ?? '')}"></label><label>Maximum length<input type="number" min="1" data-p="maxLength" value="${esc(f.maxLength ?? '')}"></label></div>` : ''}
+        ${f.type === 'date' ? `<div class="row2"><label>Earliest date <small class="muted">(formula)</small><input data-p="minDate" class="mono" value="${esc(f.minDate || '')}" placeholder="e.g. TODAY()"></label><label>Latest date <small class="muted">(formula)</small><input data-p="maxDate" class="mono" value="${esc(f.maxDate || '')}" placeholder="e.g. ADDDAYS(TODAY(), 90)"></label></div>` : ''}
+        ${['text', 'textarea', 'email', 'number'].includes(f.type) ? `<label>Placeholder <small class="muted">(grey example text)</small><input data-p="placeholder" value="${esc(f.placeholder || '')}"></label>` : ''}
         ${f.type === 'file' ? '<p class="hint">People upload a file (up to 10 MB: PDF, Office, images, text). It is stored with the record and opens from the data view. Not available in public web forms.</p>' : ''}
         ${f.type === 'checkbox' ? `<label>Checkbox text<input data-p="checkLabel" value="${esc(f.checkLabel || '')}" placeholder="Yes"></label>` : ''}
         ${f.type === 'calc' ? `<label>Formula <small class="muted">e.g. quantity * unit_price</small><textarea data-p="formula" rows="2" class="mono">${esc(f.formula || '')}</textarea></label>
@@ -346,7 +349,7 @@
           f[p] = v;
           if (p === 'type' && (v === 'select' || v === 'radio') && !f.options) f.options = ['Option A', 'Option B'];
           if (p === 'type' || p === 'recordForm') drawProps();
-          if (['formula', 'visibleIf', 'default', 'validate'].includes(p)) $('#exprErr', box).textContent = v ? (FB.expr.check(v) || '') : '';
+          if (['formula', 'visibleIf', 'default', 'validate', 'minDate', 'maxDate'].includes(p)) $('#exprErr', box).textContent = v ? (FB.expr.check(v) || '') : '';
           if (p === 'key') inp.classList.toggle('bad', !FB.logic.KEY_RE.test(v));
           touch(); drawList(); drawPreview();
         });

@@ -440,6 +440,18 @@ console.log('corrections as a route in the process');
   r = await get('/api/flows/' + cf + '/insight'); const rv = r.data.steps.find(s => s.name === 'Review the gear request'); ok(rv && rv.again === 1 && r.data.casesAgain === 1, 'Performance shows the step was done again once, and one case came back (per step, not per person)', r.data.steps);
 }
 
+console.log('milestone notifications');
+{
+  r = await post('/api/admin/flows', { name: 'Notify test', area_id: salesId }); const nf = r.data.id;
+  let fl = (await get('/api/admin/flows/' + nf)).data; const end = fl.graph.nodes.find(n => n.type === 'end');
+  end.notifyUrl = 'http://insecure.example.invalid/hook';
+  r = await put('/api/admin/flows/' + nf, { name: fl.name, description: '', graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 400 && /https/.test(r.data.error), 'a notification address must be https', r.data);
+  end.notifyUrl = 'https://example.invalid/hook'; end.notifyFormat = 'teams';
+  r = await put('/api/admin/flows/' + nf, { name: fl.name, description: '', graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 200 && r.data.status === 'active', 'with https it can be activated', r.data);
+  r = await post('/api/flows/' + nf + '/start', {}); const nid = r.data.instanceId;
+  r = await get('/api/instances/' + nid); ok(r.data.instance.status === 'done' && r.data.events.some(e => /Notified example\.invalid that the case ended as “Done”/.test(e.message)), 'a case that ends there records the notification in its timeline', r.data.events.map(e => e.message));
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');

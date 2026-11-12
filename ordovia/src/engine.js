@@ -61,6 +61,11 @@ export function advance(proc, fromNodeId, io) {
         proc.status = 'done';
         proc.finished_at = io.now();
         io.log(`Finished: ${node.name}`);
+        if (node.notifyUrl && io.webhook) {   // tell the outside world: Teams, Power Automate, any system with a web address
+          updateTitle(proc);
+          io.webhook(node.notifyUrl, { event: 'case.ended', text: `Case “${proc.title}” ended: ${node.name}`, process: proc.flowName, outcome: node.name, case: { id: proc.id, title: proc.title } }, node.notifyFormat);
+          io.log(`Notified ${safeHost(node.notifyUrl)} that the case ended as “${node.name}”`);
+        }
         break;
       }
     }

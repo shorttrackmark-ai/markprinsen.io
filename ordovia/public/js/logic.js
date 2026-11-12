@@ -72,6 +72,16 @@
         } else if (f.type === 'email' && v && !EMAIL_RE.test(v)) msg = 'Not a valid e-mail address.';
         else if (f.type === 'text' && v && FORMATS[f.format]) msg = FORMATS[f.format].check(String(v));
         else if (f.type === 'text' && v && f.pattern) { try { if (!new RegExp(f.pattern).test(String(v))) msg = f.patternMsg || 'Does not have the required format.'; } catch (e) { /* a broken pattern is reported when the form is saved */ } }
+        if (!msg && ['text', 'textarea', 'email'].includes(f.type) && v) {   // length rules
+          const len = String(v).length;
+          if (hasVal(f.minLength) && len < Number(f.minLength)) msg = `Use at least ${f.minLength} characters.`;
+          else if (hasVal(f.maxLength) && len > Number(f.maxLength)) msg = `Use at most ${f.maxLength} characters.`;
+        }
+        if (!msg && f.type === 'date' && v) {   // earliest / latest date (formulas such as TODAY() or ADDDAYS(TODAY(), 30))
+          const lo = f.minDate ? FB.expr.safe(f.minDate, ctx, null) : null, hi = f.maxDate ? FB.expr.safe(f.maxDate, ctx, null) : null;
+          if (lo && String(v) < String(lo)) msg = `The date cannot be before ${lo}.`;
+          else if (hi && String(v) > String(hi)) msg = `The date cannot be after ${hi}.`;
+        }
         if (!msg && f.validate && !isEmpty(v) && !FB.expr.truthy(FB.expr.safe(f.validate, ctx, true))) msg = f.validateMsg || 'Value is not valid.';
         if (msg) errors[f.key] = msg;
       }
@@ -121,7 +131,7 @@
         if (!KEY_RE.test(f.key || '')) problems.push(`Field key “${f.key}” must be lower-case letters, digits or _.`);
         if (keys.has(f.key)) problems.push(`Field key “${f.key}” is used twice.`);
         keys.add(f.key);
-        for (const prop of ['formula', 'visibleIf', 'default', 'validate']) {
+        for (const prop of ['formula', 'visibleIf', 'default', 'validate', 'minDate', 'maxDate']) {
           const err = f[prop] ? FB.expr.check(f[prop]) : null;
           if (err) problems.push(`${f.label || f.key} – ${prop}: ${err}`);
         }
@@ -182,6 +192,7 @@
         }
         if (n.recordId) { const er = FB.expr.check(n.recordId); if (er) errs.push(`“${n.name}” record id: ${er}`); }
         if (n.type === 'start' && n.title) { const er = FB.expr.check(n.title); if (er) errs.push(`Process title: ${er}`); }
+        if (n.type === 'end' && n.notifyUrl && !/^https:\/\/[^\s/]+\.[^\s/]+/.test(n.notifyUrl)) errs.push(`End “${n.name}”: the notification address must start with https://`);
         if (n.type === 'start' && n.subjectForm && forms && !forms.some(f => Number(f.id) === Number(n.subjectForm) && f.is_class)) errs.push('The class this process works on (at Start) is no longer a class, or no longer exists.');
         if (n.type === 'task' && n.assignee && n.assignee.type === 'attr' && (!n.assignee.key || n.assignee.value == null || n.assignee.value === '')) errs.push(`Task “${n.name}”: choose the attribute and its value.`);
         if (n.type === 'start' && n.formId && known && !known.has(Number(n.formId))) errs.push('The request form (at Start) no longer exists or is archived.');

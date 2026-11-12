@@ -312,7 +312,11 @@
         ${n.type === 'webhook' ? `<label>URL <small class="muted">(https://…)</small><input data-n="url" class="mono" value="${esc(n.url || '')}" placeholder="https://hooks.example.com/…"></label>
           <label>Data to send <small class="muted">(name = formula, empty = all variables)</small><textarea data-n="mapping" rows="4" class="mono" placeholder='text = "New order: " & item'>${esc(n.mapping || '')}</textarea></label>` : ''}
         ${n.type === 'decision' ? '<p class="hint">Select the arrows leaving this decision to set their conditions.</p>' : ''}
-        ${n.type === 'end' ? '<p class="hint">The name of this End becomes the <code>outcome</code> of the process.</p>' : ''}
+        ${n.type === 'end' ? `<p class="hint">The name of this End becomes the <code>outcome</code> of the process.</p>
+          <label class="check"><input type="checkbox" id="enNotify" ${n.notifyUrl !== undefined ? 'checked' : ''}><span>Send a notification when a case ends here</span></label>
+          ${n.notifyUrl !== undefined ? `<label>Address <small class="muted">(https; a Teams workflow, Power Automate “When an HTTP request is received”, or any system)</small><input data-n="notifyUrl" class="mono" value="${esc(n.notifyUrl || '')}" placeholder="https://…"></label>
+          <label>Message format<select data-n="notifyFormat"><option value="json" ${n.notifyFormat !== 'teams' ? 'selected' : ''}>Plain JSON (Power Automate, Zapier, your own system)</option><option value="teams" ${n.notifyFormat === 'teams' ? 'selected' : ''}>Microsoft Teams card</option></select></label>
+          <p class="hint">The message says which case ended with which outcome and links back to the case.</p>` : ''}` : ''}
         ${['task', 'decision', 'action', 'record', 'webhook'].includes(n.type) ? `<label>Instructions / work instruction <small class="muted">(shown in the task and the handbook)</small><textarea data-n="instructions" rows="4">${esc(n.instructions || '')}</textarea></label>` : ''}
         ${['task', 'decision', 'action', 'record', 'webhook'].includes(n.type) ? '<h4>Links at this step</h4><p class="hint">Norms (with the chapter), documents, photos, objects or other processes this step needs. Save a new step before linking it.</p><div id="stepLinks"></div>' : ''}
         ${n.type !== 'start' ? '<button class="btn danger small" id="delSel">Delete step</button>' : '<p class="hint">Click the background to edit who can start this process and its title.</p>'}
@@ -333,6 +337,7 @@
       };
       drawSecs();
       const dd = $('[data-docs]', box); if (dd) dd.onchange = () => { n.docIds = [...dd.selectedOptions].map(o => Number(o.value)); if (!n.docIds.length) delete n.docIds; if (n.docSections) { for (const k of Object.keys(n.docSections)) if (!(n.docIds || []).includes(Number(k))) delete n.docSections[k]; if (!Object.keys(n.docSections).length) delete n.docSections; } touch(); drawSecs(); };
+      const en = $('#enNotify', box); if (en) en.onchange = () => { if (en.checked) n.notifyUrl = ''; else { delete n.notifyUrl; delete n.notifyFormat; } touch(); drawProps(); };
       const at = $('#aType', box);
       if (at) at.onchange = () => { n.assignee = { type: at.value }; if (at.value === 'person' && meta.people[0]) n.assignee.personId = meta.people[0].id; touch(); draw(); drawProps(); };
       const upd = () => {

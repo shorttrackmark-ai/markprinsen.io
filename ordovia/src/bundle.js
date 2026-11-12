@@ -86,8 +86,8 @@ export function planBundle(b, ctx) {
       const o = { key, label: label || key, type };
       if (fd.required) o.required = true;
       if (['select', 'radio'].includes(type)) { o.options = (Array.isArray(fd.options) ? fd.options : []).map(x => str(x, 80)).filter(Boolean).slice(0, 40); if (!o.options.length) err(where + ': give the options.'); }
-      for (const p of ['default', 'formula', 'visibleIf', 'validate', 'validateMsg', 'help', 'placeholder', 'checkLabel', 'pattern', 'patternMsg']) if (fd[p] != null && fd[p] !== '') o[p] = str(fd[p], 300);
-      for (const p of ['min', 'max', 'decimals']) if (fd[p] != null && fd[p] !== '' && Number.isFinite(Number(fd[p]))) o[p] = Number(fd[p]);
+      for (const p of ['default', 'formula', 'visibleIf', 'validate', 'validateMsg', 'help', 'placeholder', 'checkLabel', 'pattern', 'patternMsg', 'minDate', 'maxDate']) if (fd[p] != null && fd[p] !== '') o[p] = str(fd[p], 300);
+      for (const p of ['min', 'max', 'decimals', 'minLength', 'maxLength']) if (fd[p] != null && fd[p] !== '' && Number.isFinite(Number(fd[p]))) o[p] = Number(fd[p]);
       if (fd.integer) o.integer = true;
       if (fd.width === 'half') o.width = 'half';
       if (fd.format && FB.logic.FORMATS[fd.format]) o.format = fd.format;

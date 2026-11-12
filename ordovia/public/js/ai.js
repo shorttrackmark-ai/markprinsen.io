@@ -53,7 +53,7 @@ Reply with ONE JSON object inside a single code block (\`\`\`json ... \`\`\`) an
 
 Field types: ${ctx.fieldTypes.join(', ')}.
 - select / radio need "options": ["A", "B"]. calc needs "formula". record needs "record_form" (a form name). person may have "person_tags".
-- Optional on a field: "default", "visibleIf" (formula; the field only shows when true), "validate" + "validateMsg" (formula that must be true), "min", "max", "decimals", "help", "width": "half", "format" (url, phone, iban, postcode_nl, code).
+- Optional on a field: "default", "visibleIf" (formula; the field only shows when true), "validate" + "validateMsg" (formula that must be true), "min", "max" (numbers), "minLength", "maxLength" (text), "minDate", "maxDate" (date formulas such as TODAY()), "decimals", "placeholder", "help", "width": "half", "format" (url, phone, iban, postcode_nl, code).
 Step types (every step has a unique "id" and a "name"; the first step in the list is where the process starts):
 - task: { "id", "type": "task", "name", "form": "form name (optional)", "instructions": "...", "who": ..., "due_hours": 48, "next": "id of the next step" }
   "who" is one of: "initiator" (the person who started it) | { "type": "tags", "tags": ["Function: Manager"], "same_as_initiator": ["Department"] } | { "type": "attribute", "attribute": "Job title", "value": "Metrologist" } | { "type": "field", "field": "key of a person field filled in earlier" } | { "type": "person", "person": "Full name" }

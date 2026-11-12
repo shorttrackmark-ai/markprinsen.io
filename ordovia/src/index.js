@@ -311,7 +311,11 @@ async function runtimeIO(c, tx, proc) {
     },
     createRecord: (form, data) => tx.add('INSERT INTO submissions(form_id, person_id, instance_id, data, created_at) VALUES (?,?,?,?,?)', form.id, null, proc.id, JSON.stringify(data), now()),
     updateRecord: (form, rid, patch) => tx.add('UPDATE submissions SET data = json_patch(data, ?), updated_at = ? WHERE id = ? AND form_id = ?', JSON.stringify(patch), now(), rid, form.id),
-    webhook: (url, payload) => { if (/^https:\/\//.test(url || '')) tx.after.push({ url, payload }); },
+    webhook: (url, payload, format) => {
+      if (!/^https:\/\//.test(url || '')) return;
+      const p = payload && payload.case ? { ...payload, link: origin + '/#/processes/' + payload.case.id } : payload;   // a case notification links back to the case
+      tx.after.push({ url, payload: format === 'teams' ? notifyBody('teams', p) : p });
+    },
   };
 }
 
