@@ -45,3 +45,6 @@ Integration: *API tokens* (act as a chosen person), *public web forms* (a servic
 - `GET /api/v1/openapi.json` (public, Swagger 2.0) imports as a Power Automate / Logic Apps custom connector. The API page explains the steps.
 - Notification webhook format `teams` posts an Adaptive Card for a Teams workflow webhook (setting `notify_format`).
 - Not built yet: AI steps (extract, classify, draft) and Microsoft sign-in.
+
+## One address (built)
+The example no longer has its own Worker. `ordovia` has a second D1 (`DB_DEMO`) and R2 bucket (`FILES_DEMO`); "Try the example" sets the cookie `ordovia_mode=example`, and from then on that browser's requests use the example database and its own session cookie. "Exit example" clears it. Hourly cron resets the example at 03:xx UTC. `npm run deploy` migrates both databases. The old `ordovia-demo` Worker is obsolete.

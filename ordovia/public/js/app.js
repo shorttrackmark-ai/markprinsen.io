@@ -37,7 +37,8 @@
     $('#who').innerHTML = `<span class="avatar">${esc(u.name.split(' ').map(s => s[0]).slice(0, 2).join(''))}</span><span class="who-name">${esc(u.name)}</span>`;
     const dc = $('#demoCtl');
     if (dc && FB.state.settings.demoSite) {
-      dc.innerHTML = `<span class="demo-pill" title="The example resets every night and sends nothing anywhere">Example</span><select id="demoWho" aria-label="Look through someone else's eyes">${PERSONAS.map(([k, l]) => `<option value="${k}" ${(k === 'admin' ? 'demo@example.com' : k + '@example.com') === u.email ? 'selected' : ''}>${esc(l.split(' – ')[0])}</option>`).join('')}</select><button class="btn small ghost" id="demoReset" title="Throw away all changes and start fresh">Reset</button>`;
+      dc.innerHTML = `<span class="demo-pill" title="The example resets every night and sends nothing anywhere">Example</span><select id="demoWho" aria-label="Look through someone else's eyes">${PERSONAS.map(([k, l]) => `<option value="${k}" ${(k === 'admin' ? 'demo@example.com' : k + '@example.com') === u.email ? 'selected' : ''}>${esc(l.split(' – ')[0])}</option>`).join('')}</select><button class="btn small ghost" id="demoReset" title="Throw away all changes and start fresh">Reset</button><button class="btn small" id="demoLeave" title="Back to your own workspace">Exit example</button>`;
+      $('#demoLeave').onclick = async () => { try { await api.post('/demo/leave'); location.hash = '#/'; location.reload(); } catch (err) { toast(err.message, 'error'); } };
       $('#demoWho').onchange = (e) => enterDemo(e.target.value);
       $('#demoReset').onclick = async () => { if (!confirm('Reset the example to its starting state?')) return; try { await api.post('/demo/reset'); await enterDemo('admin'); toast('The example is fresh again', 'ok'); } catch (err) { toast(err.message, 'error'); } };
     }
@@ -50,7 +51,8 @@
   const PERSONAS = [['admin', 'Admin – builds processes, forms and dashboards'], ['anna', 'Anna – Manager, Sales'], ['bram', 'Bram – Employee, Sales'], ['carla', 'Carla – Employee, Operations'], ['daan', 'Daan – Manager, Operations'], ['eva', 'Eva – Finance']];
   const enterDemo = async (as) => { try { await api.post('/demo/enter', { as }); await FB.loadMeta(); location.hash = '#/'; FB.render(); } catch (err) { toast(err.message, 'error'); } };
   FB.enterDemo = enterDemo;
-  const exampleButton = () => (FB.state.settings.demoUrl ? `<a class="btn block example-btn" href="${esc(FB.state.settings.demoUrl)}">▶ Try the example – no login needed</a>` : '');
+  const exampleButton = () => (FB.state.settings.canTryExample ? '<button type="button" class="btn block example-btn" data-example>▶ Try the example – no login needed</button>' : '');
+  const wireExample = (root) => { const b = $('[data-example]', root); if (b) b.onclick = async () => { b.disabled = true; b.textContent = 'Preparing the example…'; try { await api.post('/demo/enter', { as: 'admin' }); location.hash = '#/'; location.reload(); } catch (err) { toast(err.message, 'error'); b.disabled = false; b.textContent = '▶ Try the example – no login needed'; } }; };
   P.login = function (main) {
     if (FB.state.settings.demoSite) {
       main.innerHTML = `<div class="login-wrap"><div class="card login"><div class="brand big"><span class="logo-mark">◆</span> Ordovia – example</div>
@@ -73,6 +75,7 @@
         ${[['anna', 'Anna – Manager, Sales'], ['bram', 'Bram – Employee, Sales'], ['carla', 'Carla – Employee, Operations'], ['daan', 'Daan – Manager, Operations'], ['eva', 'Eva – Finance']]
           .map(([k, l]) => `<button type="button" class="chip" data-email="${k}@example.com">${esc(l)}</button>`).join('')}</div>` : ''}
     </form></div>`;
+    wireExample(main);
     const f = $('#loginForm');
     $$('[data-email]', f).forEach(b => b.onclick = () => { f.email.value = b.dataset.email; f.password.value = 'demo1234'; f.requestSubmit(); });
     f.onsubmit = async (e) => {
@@ -92,6 +95,7 @@
       <label>Password <small class="muted">(at least 8 characters)</small><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
       <label class="check"><input type="checkbox" name="demo" checked><span>Fill with demo data (colleagues, forms, processes, dashboard)</span></label>
       <button class="btn primary block">Create workspace</button>${exampleButton()}</form></div>`;
+    wireExample(main);
     const f = $('#setupForm');
     f.onsubmit = async (e) => {
       e.preventDefault();

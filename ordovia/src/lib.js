@@ -53,8 +53,10 @@ export async function sha256(s) { return [...new Uint8Array(await crypto.subtle.
 export function randomToken() { return [...crypto.getRandomValues(new Uint8Array(32))].map(b => b.toString(16).padStart(2, '0')).join(''); }
 
 export const COOKIE = 'ordovia_session';
-export function sessionCookie(token, maxAge) {
-  return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+export const EXAMPLE_COOKIE = 'ordovia_example';   // the session inside the example (a separate database, so a separate sign-in)
+export const MODE_COOKIE = 'ordovia_mode';         // "example": this browser looks at the example instead of the real workspace
+export function sessionCookie(token, maxAge, name = COOKIE) {
+  return `${name}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 }
 export function readCookie(req, name) {
   const m = (req.headers.get('cookie') || '').match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)'));

@@ -3,15 +3,13 @@
 // runs here on the server. The browser only renders.
 import {
   FB, HttpError, now, parse, slugify, qi, all, first, run, Tx,
-  hashPassword, verifyPassword, sha256, randomToken, COOKIE, sessionCookie, readCookie,
+  hashPassword, verifyPassword, sha256, randomToken, COOKIE, EXAMPLE_COOKIE, MODE_COOKIE, sessionCookie, readCookie,
   loadDirectory, loadForms, recordLabel, formViewSQL,
   canViewForm, canAddForm, tagRule, assertSelect, tabular,
   STATUSES, cleanStatus, reviewDueAt, likePattern,
 } from './lib.js';
 import { advance, startNode, mergeFormData } from './engine.js';
 import { seedDemo, resetDemo, DEMO_ADMIN, DEMO_PASSWORD } from './seed.js';
-
-let DEMO = false;   // true on the public example (env DEMO=1): one-click sign-in, nightly reset, nothing leaves the building
 
 const SESSION_DAYS = 14;
 const routes = [];
@@ -24,7 +22,12 @@ const route = (method, path, handler, opts = {}) => {
 // ---------------------------------------------------------------- request context
 class Ctx {
   constructor(req, env, exec) {
-    this.req = req; this.env = env; this.db = env.DB; this.exec = exec;
+    this.req = req; this.env = env; this.exec = exec;
+    // The example lives in its own database (DB_DEMO) beside the real one, under the same address. A browser is in the example when it chose so.
+    const path = new URL(req.url).pathname;
+    this.demo = !!env.DB_DEMO && (path.startsWith('/api/demo/') || readCookie(req, MODE_COOKIE) === 'example');
+    this.db = this.demo ? env.DB_DEMO : env.DB; this.files = this.demo ? env.FILES_DEMO : env.FILES;
+    this.cookieName = this.demo ? EXAMPLE_COOKIE : COOKIE;
     this.url = new URL(req.url); this.user = null; this.cookies = [];
     this._dir = null; this._forms = null; this._settings = null; this._body = undefined; this.noteInfo = null;
   }
@@ -59,7 +62,6 @@ export default {
     const url = new URL(req.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
     const c = new Ctx(req, env, exec);
-    DEMO = env.DEMO === '1';
     try {
       // CSRF protection: state-changing calls must carry our custom header (forces a CORS preflight cross-site).
       const bearer = /^bearer\s+ord_/i.test(req.headers.get('authorization') || '');
@@ -90,7 +92,7 @@ export default {
   // Hourly: flag overdue tasks and send reminders to the notification webhook.
   async scheduled(event, env, exec) {
     const db = env.DB;
-    if (env.DEMO === '1') { await resetDemo(db, env.FILES); return; }   // (the example starts fresh every night)
+    if (env.DB_DEMO && new Date(event.scheduledTime).getUTCHours() === 3) exec.waitUntil(resetDemo(env.DB_DEMO, env.FILES_DEMO));   // (the example starts fresh every night)
     await cleanLooseFiles(db, env.FILES);
     const due = await all(db, `SELECT t.id, t.name, t.instance_id, i.title FROM tasks t JOIN instances i ON i.id = t.instance_id
       WHERE t.status = 'open' AND t.due_at IS NOT NULL AND t.due_at < ? AND t.reminded_at IS NULL LIMIT 40`, now());
@@ -116,7 +118,6 @@ function notifyBody(format, p) {
 }
 
 async function postJSON(url, payload) {
-  if (DEMO) return;   // (the example sends nothing anywhere)
   try { await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }); }
   catch (e) { console.warn('webhook failed', url, e.message); }
 }
@@ -133,7 +134,7 @@ async function authenticate(c) {
     c.exec.waitUntil(run(c.db, 'UPDATE api_tokens SET last_used_at = ? WHERE id = ?', now(), t.id));
     return;
   }
-  const token = readCookie(c.req, COOKIE);
+  const token = readCookie(c.req, c.cookieName);
   if (!token) return;
   const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin FROM sessions s JOIN persons p ON p.id = s.person_id
     WHERE s.token_hash = ? AND s.expires_at > ? AND p.active = 1`, await sha256(token), now());
@@ -146,13 +147,13 @@ async function startSession(c, personId) {
     c.db.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(now()),
     c.db.prepare('INSERT INTO sessions(token_hash, person_id, expires_at) VALUES (?,?,?)').bind(await sha256(token), personId, exp),
   ]);
-  c.cookies.push(sessionCookie(token, SESSION_DAYS * 86400));
+  c.cookies.push(sessionCookie(token, SESSION_DAYS * 86400, c.cookieName));
 }
 
 route('GET', '/api/session', async (c) => {
   const any = await first(c.db, 'SELECT id FROM persons LIMIT 1');
   const s = await c.settings();
-  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', demo: s.demo === '1', demoSite: DEMO, demoUrl: DEMO ? '' : (c.env.DEMO_URL || '') } };
+  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', demo: s.demo === '1', demoSite: c.demo, canTryExample: !c.demo && !!c.env.DB_DEMO } };
 }, { public: true });
 
 route('POST', '/api/setup', async (c) => {
@@ -166,7 +167,7 @@ route('POST', '/api/setup', async (c) => {
     c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('company', ?)").bind(String(b.company || 'My company').slice(0, 80)),
   ]);
   let adminId;
-  if (b.demo) adminId = await seedDemo(c.db, { name, email, hash }, c.env.FILES);
+  if (b.demo) adminId = await seedDemo(c.db, { name, email, hash }, c.files);
   else adminId = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at) VALUES (?,?,?,1,1,?)', name, email, hash, now());
   await startSession(c, adminId);
   return { ok: true };
@@ -183,9 +184,9 @@ route('POST', '/api/login', async (c) => {
 }, { public: true });
 
 route('POST', '/api/logout', async (c) => {
-  const token = readCookie(c.req, COOKIE);
+  const token = readCookie(c.req, c.cookieName);
   if (token) await run(c.db, 'DELETE FROM sessions WHERE token_hash = ?', await sha256(token));
-  c.cookies.push(sessionCookie('', 0));
+  c.cookies.push(sessionCookie('', 0, c.cookieName));
   return { ok: true };
 }, { public: true });
 
@@ -304,7 +305,7 @@ async function finishProc(c, tx, proc) {
   tx.add('UPDATE instances SET vars = ?, status = ?, title = ?, finished_at = ? WHERE id = ?', JSON.stringify(proc.vars), proc.status, proc.title, proc.finished_at, proc.id);
   await tx.commit();
   if (proc.callback && (proc.status === 'done' || proc.status === 'stuck')) tx.after.push({ url: proc.callback, payload: { event: 'run.' + (proc.status === 'done' ? 'finished' : 'stuck'), run: runInfo(proc, c.url.origin), outputs: publicVars(proc.vars) } });
-  if (tx.after.length) c.exec.waitUntil(Promise.all(tx.after.map(h => postJSON(h.url, h.payload))));
+  if (tx.after.length && !c.demo) c.exec.waitUntil(Promise.all(tx.after.map(h => postJSON(h.url, h.payload))));
 }
 const publicVars = (vars) => { const o = { ...vars }; delete o.initiator; delete o.process; return o; };
 const runInfo = (proc, origin) => ({ id: proc.id, process: proc.flowName, status: proc.status, outcome: (proc.vars || {}).outcome ?? null, reference: proc.ref ?? null, url: origin + '/#/processes/' + proc.id });
@@ -702,7 +703,7 @@ route('GET', '/api/admin/people', async (c) => {
   return { people: [...D.persons.values()].map(p => ({ ...p, tagIds: [...D.tagIdsOf(p.id)] })), tags: [...D.tags.values()], categories: D.categories() };
 }, { admin: true });
 async function savePerson(c, pid, b) {
-  if (DEMO) throw new HttpError(403, 'People cannot be changed in the example.');
+  if (c.demo) throw new HttpError(403, 'People cannot be changed in the example.');
   const email = String(b.email || '').trim(), name = String(b.name || '').trim();
   if (!name || !/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, 'Name and a valid e-mail are required');
   if (await first(c.db, 'SELECT 1 FROM persons WHERE email = ? AND id != ?', email, pid || 0)) throw new HttpError(409, 'E-mail already in use');
@@ -742,7 +743,7 @@ route('POST', '/api/admin/sql', async (c) => {
   const sql = String((await c.body()).sql || '').trim();
   if (!sql) throw new HttpError(400, 'Empty query');
   if (/\b(sessions|pw_hash)\b/i.test(sql)) throw new HttpError(400, 'Passwords and sessions are protected.');
-  if (DEMO && !/^\s*(select|with|explain)\b/i.test(sql)) throw new HttpError(403, 'In the example the SQL console is read-only.');
+  if (c.demo && !/^\s*(select|with|explain)\b/i.test(sql)) throw new HttpError(403, 'In the example the SQL console is read-only.');
   const t0 = Date.now();
   try { const r = await tabular(c.db, sql); return { ...r, ms: Date.now() - t0 }; }
   catch (e) { throw new HttpError(400, e.message.replace(/^D1_ERROR: /, '')); }
@@ -754,7 +755,7 @@ route('PUT', '/api/admin/settings', async (c) => {
   const set = (k, v) => st.push(c.db.prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, v));
   if (b.company != null) set('company', String(b.company).slice(0, 80));
   if (b.color != null) { if (b.color && !/^#[0-9a-f]{6}$/i.test(b.color)) throw new HttpError(400, 'Colour must look like #4f46e5'); set('color', b.color); }
-  if (DEMO && b.notify_webhook) throw new HttpError(403, 'Webhooks are switched off in the example.');
+  if (c.demo && b.notify_webhook) throw new HttpError(403, 'Webhooks are switched off in the example.');
   if (b.notify_webhook != null) { if (b.notify_webhook && !/^https:\/\//.test(b.notify_webhook)) throw new HttpError(400, 'Webhook must start with https://'); set('notify_webhook', b.notify_webhook); }
   if (b.notify_format != null) { if (!['json', 'teams'].includes(b.notify_format)) throw new HttpError(400, 'Format must be json or teams'); set('notify_format', b.notify_format); }
   if (st.length) await c.db.batch(st);
@@ -1066,27 +1067,33 @@ route('GET', '/api/v1/openapi.json', async (c) => {
   return new Response(JSON.stringify(spec, null, 1), { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300', 'content-disposition': 'inline; filename="ordovia-api.swagger.json"' } });
 }, { public: true });
 
-// ---------------------------------------------------------------- the public example (only where DEMO=1)
+// ---------------------------------------------------------------- the public example (its own database, DB_DEMO)
 const PERSONAS = { admin: DEMO_ADMIN.email, anna: 'anna@example.com', bram: 'bram@example.com', sanne: 'sanne@example.com', carla: 'carla@example.com', daan: 'daan@example.com', eva: 'eva@example.com' };
 async function ensureDemoData(c) {
-  if (!(await first(c.db, 'SELECT id FROM persons LIMIT 1'))) { await resetDemo(c.db, c.env.FILES); await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now())); }
+  if (!(await first(c.db, 'SELECT id FROM persons LIMIT 1'))) { await resetDemo(c.db, c.files); await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now())); }
 }
 route('POST', '/api/demo/enter', async (c) => {
-  if (!DEMO) throw new HttpError(404, 'Not available');
+  if (!c.demo) throw new HttpError(404, 'Not available');
   await ensureDemoData(c);
   let b = {}; try { b = (await c.body()) || {}; } catch { /* default persona */ }
   const email = PERSONAS[b.as] || PERSONAS.admin;
   const p = await first(c.db, 'SELECT id FROM persons WHERE email = ?', email);
   if (!p) throw new HttpError(404, 'Demo person not found');
   await startSession(c, p.id);
+  c.cookies.push(`${MODE_COOKIE}=example; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`);
+  return { ok: true };
+}, { public: true });
+// back to the real workspace
+route('POST', '/api/demo/leave', async (c) => {
+  c.cookies.push(`${MODE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
   return { ok: true };
 }, { public: true });
 route('POST', '/api/demo/reset', async (c) => {
-  if (!DEMO) throw new HttpError(404, 'Not available');
+  if (!c.demo) throw new HttpError(404, 'Not available');
   const nowMs = Date.now();
   const seeded = await first(c.db, "SELECT value FROM settings WHERE key = 'demo_seeded_at'");
   if (seeded && nowMs - Number(seeded.value) < 10 * 60000) throw new HttpError(429, 'The example was reset a moment ago. Try again in a few minutes.');
-  await resetDemo(c.db, c.env.FILES);
+  await resetDemo(c.db, c.files);
   await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now()));
   return { ok: true };
 }, { public: true });
@@ -1124,7 +1131,7 @@ const safeName = (n) => (String(n || 'file').replace(/[\\/:*?"<>|\r\n]+/g, '_').
 const mimeFor = (name, given) => { const ext = (/\.([a-z0-9]+)$/i.exec(name) || [])[1]; return EXT_MIME[(ext || '').toLowerCase()] || (given && /^[a-z]+\/[a-z0-9.+-]+$/i.test(given) && !/html|svg|javascript|xml/i.test(given) ? given : 'application/octet-stream'); };
 
 route('POST', '/api/files', async (c) => {
-  if (!c.env.FILES) throw new HttpError(503, 'File storage is not set up (R2 binding FILES).');
+  if (!c.files) throw new HttpError(503, 'File storage is not set up (R2 binding FILES).');
   const name = safeName(c.url.searchParams.get('name'));
   if (BLOCKED_EXT.test(name)) throw new HttpError(415, 'This kind of file is not allowed (programs, web pages and scripts).');
   if (Number(c.req.headers.get('content-length') || 0) > MAX_FILE) throw new HttpError(413, 'Files can be at most 10 MB.');
@@ -1134,7 +1141,7 @@ route('POST', '/api/files', async (c) => {
   if (!buf.byteLength) throw new HttpError(400, 'The file is empty.');
   if (buf.byteLength > MAX_FILE) throw new HttpError(413, 'Files can be at most 10 MB.');
   const key = 'f/' + randomToken().slice(0, 32), mime = mimeFor(name, c.url.searchParams.get('type'));
-  await c.env.FILES.put(key, buf, { httpMetadata: { contentType: mime } });
+  await c.files.put(key, buf, { httpMetadata: { contentType: mime } });
   const id = await run(c.db, 'INSERT INTO files(key, name, mime, size, uploaded_by, created_at) VALUES (?,?,?,?,?,?)', key, name, mime, buf.byteLength, c.user.id, now());
   return { id, name, size: buf.byteLength, mime };
 });
@@ -1150,7 +1157,7 @@ route('GET', '/api/files/:id', async (c, { id }) => {
   const f = await first(c.db, 'SELECT * FROM files WHERE id = ?', Number(id));
   if (!f) throw new HttpError(404, 'File not found');
   if (!(await canReadFile(c, f))) throw new HttpError(403, 'No access to this file');
-  const obj = c.env.FILES ? await c.env.FILES.get(f.key) : null;
+  const obj = c.files ? await c.files.get(f.key) : null;
   if (!obj) throw new HttpError(404, 'The file itself is missing');
   const inline = INLINE_OK.has(f.mime);
   return new Response(obj.body, { headers: {
@@ -1239,7 +1246,7 @@ route('DELETE', '/api/admin/documents/:id', async (c, { id }) => {
   if (!d) throw new HttpError(404, 'Document not found');
   if (d.status !== 'archived') throw new HttpError(409, 'Archive the document first: archived items can be deleted for good.');
   const files = await all(c.db, 'SELECT f.id, f.key FROM document_versions v JOIN files f ON f.id = v.file_id WHERE v.document_id = ?', d.id);
-  for (const f of files) { if (c.env.FILES) await c.env.FILES.delete(f.key); }
+  for (const f of files) { if (c.files) await c.files.delete(f.key); }
   await c.db.batch([...files.map(f => c.db.prepare('DELETE FROM files WHERE id = ?').bind(f.id)), c.db.prepare('DELETE FROM documents WHERE id = ?').bind(d.id)]);
   c.note(d.name, files.length + ' file(s) deleted');
 }, { admin: true });
