@@ -404,7 +404,7 @@ export async function seedDemo(db, admin, bucket) {
   {
     const docId = (name) => M.documents.find(d => d.name === name).id;
     const node = (flowName, nodeName) => { const fl = M.flows.find(x => x.name === flowName); const g = typeof fl.graph === 'string' ? JSON.parse(fl.graph) : fl.graph; return [fl.id, g.nodes.find(n => n.name === nodeName).id]; };
-    const link = (a, b, note, showIf) => M.links.push({ id: id('links'), a_type: a[0], a_id: a[1], a_sub: a[2] || null, b_type: b[0], b_id: b[1], b_sub: b[2] || null, note: note || null, show_if: showIf || null, created_by: P.admin, created_at: at() });
+    const link = (a, b, note, showIf, title) => M.links.push({ id: id('links'), a_type: a[0], a_id: a[1], a_sub: a[2] || null, b_type: b[0], b_id: b[1], b_sub: b[2] || null, note: note || null, show_if: showIf || null, title: title || null, created_by: P.admin, created_at: at() });
     const [pf, finNode] = node('Purchase request', 'Finance approval');
     link(['flow', pf, finNode], ['document', docId('Purchasing norm: approval limits')], 'Above EUR 1,000: both approvals', 'total_incl > 1000');
     const [cf, calNode] = node('Machine calibration', 'Calibrate');
@@ -413,6 +413,9 @@ export async function seedDemo(db, admin, bucket) {
     link(['object', machine('M-003')], ['document', docId('Torque wrench set (photo)')], 'Front view');
     link(['object', machine('M-003')], ['document', docId('Calibration procedure')], 'Section 2: tolerances');
     link(['object', machine('M-001')], ['document', docId('Calibration procedure')], 'Section 2: tolerances');
+    // the single source stays in Microsoft: Ordovia only knows where it is
+    link(['object', machine('M-001')], ['url', 0, 'https://contoso.sharepoint.com/sites/quality/Shared%20Documents/Calibration%20certificates/CNC-lathe-1'], 'Latest certificate', null, 'Calibration certificates (SharePoint)');
+    link(['flow', cf, calNode], ['url', 0, 'https://teams.microsoft.com/l/channel/19%3Aquality/Quality'], 'Questions? Ask here', null, 'Quality channel (Teams)');
   }
 
   M.settings.push({ key: 'demo', value: '1' });
@@ -443,7 +446,7 @@ export async function seedDemo(db, admin, bucket) {
     events: ['id', 'instance_id', 'person_id', 'message', 'created_at'],
     flow_versions: ['id', 'flow_id', 'version', 'name', 'graph', 'doc', 'saved_at', 'saved_by'],
     files: ['id', 'key', 'name', 'mime', 'size', 'uploaded_by', 'created_at', 'attached_at'],
-    links: ['id', 'a_type', 'a_id', 'a_sub', 'b_type', 'b_id', 'b_sub', 'note', 'show_if', 'created_by', 'created_at'],
+    links: ['id', 'a_type', 'a_id', 'a_sub', 'b_type', 'b_id', 'b_sub', 'note', 'show_if', 'title', 'created_by', 'created_at'],
     documents: ['id', 'name', 'kind', 'description', 'area_id', 'folder', 'owner_id', 'status', 'version', 'review_months', 'reviewed_at', 'created_at', 'updated_at'],
     document_versions: ['id', 'document_id', 'version', 'file_id', 'note', 'uploaded_by', 'uploaded_at'],
     dashboards: ['id', 'name', 'widgets', 'access', 'area_id', 'status', 'owner_id', 'updated_at'],

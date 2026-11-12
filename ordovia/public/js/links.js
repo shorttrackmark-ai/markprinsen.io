@@ -8,7 +8,9 @@
   const Org = FB.org;
 
   /** One linked item as a list entry: picture, kind, name (a link), the part that matters (chapter, page), the condition, and a remove button. */
-  Org.linkItem = (it, canEdit) => `<li class="link-item ${it.gone ? 'gone' : ''}">${it.image ? `<img class="link-thumb" src="/api/files/${esc(it.image)}" alt="" loading="lazy">` : ''}
+  Org.linkItem = (it, canEdit) => it.external ? `<li class="link-item"><span class="link-ext" aria-hidden="true">↗</span>
+    <span class="link-body"><span class="link-kind">${esc(it.kind)}</span> <a href="${esc(it.href)}" target="_blank" rel="noopener noreferrer"><b>${esc(it.label)}</b></a>${it.note ? ` <span class="doc-section">› ${esc(it.note)}</span>` : ''}${it.showIf ? ` <span class="small muted">· only when <code>${esc(it.showIf)}</code></span>` : ''}</span>
+    ${canEdit && it.linkId ? `<button type="button" class="icon-btn danger" data-unlink="${it.linkId}" title="Remove this link">×</button>` : ''}</li>` : `<li class="link-item ${it.gone ? 'gone' : ''}">${it.image ? `<img class="link-thumb" src="/api/files/${esc(it.image)}" alt="" loading="lazy">` : ''}
     <span class="link-body"><span class="link-kind">${esc(it.kind || (it.gone ? 'Removed' : ''))}</span> <a href="${esc(it.href || '#/')}"><b>${esc(it.label)}</b></a>${it.sub_label ? ` <span class="muted">› ${esc(it.sub_label)}</span>` : ''}${it.note ? ` <span class="doc-section">› ${esc(it.note)}</span>` : ''}${it.showIf ? ` <span class="small muted">· only when <code>${esc(it.showIf)}</code></span>` : ''}${it.derived ? ' <span class="small muted">· set in the flow</span>' : ''}</span>
     ${canEdit && it.linkId ? `<button type="button" class="icon-btn danger" data-unlink="${it.linkId}" title="Remove this link">×</button>` : ''}</li>`;
   /** A read-only list of linked items (task page, handbook steps). */
@@ -37,8 +39,11 @@
 
   /** Search for the other end, choose the part that matters, and optionally when it applies. */
   function pick(ref, done) {
-    const m = modal('Link to…', `<div class="row2"><label>What<select id="lkType"><option value="">Everything</option><option value="document">Documents &amp; photos</option><option value="object">Objects</option><option value="flow">Processes &amp; steps</option></select></label>
+    const m = modal('Link to…', `<div class="row2"><label>What<select id="lkType"><option value="">Everything</option><option value="document">Documents &amp; photos</option><option value="object">Objects</option><option value="flow">Processes &amp; steps</option><option value="url">A web address (SharePoint, OneDrive, Teams…)</option></select></label>
       <label>Search<input id="lkQ" type="search" placeholder="name…" autocomplete="off"></label></div>
+      <div id="lkUrl" hidden><label>Address <small class="muted">(copy it from the browser; starts with https://)</small><input id="lkAddr" type="url" placeholder="https://contoso.sharepoint.com/sites/quality/…"></label>
+        <label>Name people see<input id="lkTitle" maxlength="120" placeholder="e.g. Calibration certificates (SharePoint)"></label>
+        <div class="form-actions"><button type="button" class="btn primary" id="lkUrlNext">Continue</button></div></div>
       <div id="lkResults" class="lk-results"></div>
       <form id="lkForm" hidden><p>Linking to <b id="lkChosen"></b></p>
         <label id="lkStepRow" hidden>Which step? <small class="muted">(optional)</small><select id="lkStep"></select></label>
@@ -48,6 +53,9 @@
     const root = m.root;
     let timer = null, chosen = null, last = [];
     const search = async () => {
+      const isUrl = $('#lkType', root).value === 'url';
+      $('#lkUrl', root).hidden = !isUrl; $('#lkResults', root).hidden = isUrl; $('#lkQ', root).closest('label').hidden = isUrl;
+      if (isUrl) return;
       const r = await api.get(`/link-search?type=${encodeURIComponent($('#lkType', root).value)}&q=${encodeURIComponent($('#lkQ', root).value)}`);
       last = r.results.filter(x => !(x.type === ref.type && x.id === Number(ref.id) && !ref.sub));
       $('#lkResults', root).innerHTML = last.length ? `<ul class="link-list">${last.map((x, i) => `<li class="link-item"><button type="button" class="lk-pick" data-i="${i}">${x.image ? `<img class="link-thumb" src="/api/files/${esc(x.image)}" alt="">` : ''}<span class="link-kind">${esc(x.kind)}</span> <b>${esc(x.label)}</b></button></li>`).join('')}</ul>` : '<p class="muted">Nothing found.</p>';
@@ -62,13 +70,20 @@
       $('#lkResults', root).hidden = true; $('.row2', root).hidden = true; $('#lkForm', root).hidden = false;
       $('#lkNote', root).focus();
     };
-    $('#lkBack', root).onclick = () => { $('#lkForm', root).hidden = true; $('#lkResults', root).hidden = false; $('.row2', root).hidden = false; };
+    $('#lkBack', root).onclick = () => { $('#lkForm', root).hidden = true; $('.row2', root).hidden = false; search(); };
+    $('#lkUrlNext', root).onclick = () => {
+      const addr = $('#lkAddr', root).value.trim();
+      if (!/^https:\/\/[^\s/]+\.[^\s/]+/.test(addr)) { toast('Use a full address starting with https://', 'error'); return; }
+      let host = ''; try { host = new URL(addr).hostname; } catch (e) { /* checked above */ }
+      choose({ type: 'url', id: 0, sub: addr, label: $('#lkTitle', root).value.trim() || host, kind: 'Web address' });
+      $('#lkUrl', root).hidden = true;
+    };
     $('#lkQ', root).oninput = () => { clearTimeout(timer); timer = setTimeout(search, 200); };
     $('#lkType', root).onchange = search;
     $('#lkForm', root).onsubmit = async (e) => {
       e.preventDefault();
       try {
-        await api.post('/links', { a: { type: ref.type, id: Number(ref.id), sub: ref.sub || null }, b: { type: chosen.type, id: chosen.id, sub: $('#lkStep', root).value || null }, note: $('#lkNote', root).value, showIf: $('#lkIf', root).value });
+        await api.post('/links', { a: { type: ref.type, id: Number(ref.id), sub: ref.sub || null }, b: { type: chosen.type, id: chosen.id, sub: chosen.type === 'url' ? chosen.sub : ($('#lkStep', root).value || null) }, title: chosen.type === 'url' ? chosen.label : undefined, note: $('#lkNote', root).value, showIf: $('#lkIf', root).value });
         m.close(); toast('Linked', 'ok'); done();
       } catch (err) { toast(err.message, 'error'); }
     };

@@ -357,6 +357,25 @@ console.log('case report');
   r = await get('/api/instances/' + done.id); ok(r.data.version >= 1 && Array.isArray(r.data.submissions) && r.data.submissions.length >= 1 && r.data.submissions[0].data && r.data.tasks.length >= 1 && r.data.events.length >= 1, 'a case carries everything a report needs: version, entered information, steps, timeline', Object.keys(r.data));
 }
 
+console.log('links to things outside Ordovia');
+{
+  const machine = (await get('/api/objects')).data.find(o => o.name === 'Machine');
+  const m4 = (await get('/api/objects/' + machine.id)).data.objects.find(o => o.data.machine_id === 'M-004');
+  const sp = 'https://contoso.sharepoint.com/sites/quality/Shared%20Documents/CMM-manual.pdf';
+  r = await post('/api/links', { a: { type: 'object', id: m4.id }, b: { type: 'url', id: 0, sub: sp }, title: 'CMM manual (SharePoint)', note: 'Chapter 5: probes' }); ok(r.status === 200, 'link a machine to a SharePoint file', r.data); const el = r.data.id;
+  r = await get('/api/links?type=object&id=' + m4.id); const it = r.data.out.find(x => x.external); ok(it && it.kind === 'SharePoint' && it.label === 'CMM manual (SharePoint)' && it.href === sp && it.note === 'Chapter 5: probes', 'it shows with its provider, name and the part that matters', it);
+  r = await post('/api/links', { a: { type: 'object', id: m4.id }, b: { type: 'url', id: 0, sub: 'http://insecure.example.com/x' } }); ok(r.status === 400, 'only https addresses');
+  r = await post('/api/links', { a: { type: 'object', id: m4.id }, b: { type: 'url', id: 0, sub: 'javascript:alert(1)' } }); ok(r.status === 400, 'no script addresses');
+  r = await post('/api/links', { a: { type: 'object', id: m4.id }, b: { type: 'url', id: 0, sub: sp }, title: 'again' }); ok(r.status === 409, 'the same address cannot be linked twice from one item');
+  r = await post('/api/links', { a: { type: 'url', id: 0, sub: sp }, b: { type: 'object', id: m4.id } }); ok(r.status === 400, 'a link starts inside Ordovia');
+  r = await post('/api/links', { a: { type: 'object', id: m4.id }, b: { type: 'url', id: 0, sub: 'https://teams.microsoft.com/l/channel/abc/Quality' }, title: 'Quality (Teams)' }); ok(r.status === 200, 'and to a Teams channel');
+  r = await get('/api/links?type=object&id=' + m4.id); ok(r.data.out.some(x => x.kind === 'Teams') && r.data.out.some(x => x.kind === 'SharePoint'), 'each is labelled by where it lives');
+  r = await del('/api/links/' + el); ok(r.status === 200, 'remove it');
+  // the demo has outside links at a step and on a machine
+  const calib = (await get('/api/home')).data.flows.find(x => x.name === 'Machine calibration');
+  r = await get('/api/handbook/' + calib.id); ok(r.data.steps.find(s => s.name === 'Calibrate').links.some(x => x.external && x.kind === 'Teams'), 'a step lists the Teams channel');
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');

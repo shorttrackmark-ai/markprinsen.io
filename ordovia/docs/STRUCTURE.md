@@ -78,3 +78,6 @@ Build › Templates: 11 ready-made processes in five packs (Health & safety: inc
 
 ## Case report and CSV export (built)
 Cases › a case › Report: a print-ready record (summary with process version, route diagram, steps with who/when, the information entered per step, the full timeline) for auditors and files; print or save as PDF from the browser. Every register has "Export CSV" (what is on screen).
+
+## External links: the single source stays where it lives (built)
+A link can point outside Ordovia (link type `url`, migration 0009; https only): a SharePoint or OneDrive file, a Teams channel, a Google Drive file, any page. It is labelled by where it lives, shows with a name and the part that matters, can carry a condition, and appears on objects, processes and steps like any other link. Ordovia only records where things are; nothing is copied and nothing is fetched.

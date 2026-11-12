@@ -1421,10 +1421,21 @@ route('GET', '/api/objects/:fid/:id', async (c, { fid, id }) => {
 
 // ---------------------------------------------------------------- links: connect anything to anything
 // An end of a link is { type: 'document' | 'object' | 'flow', id, sub }: sub is a step of a flow (its node id). a "refers to" b; both ends show the link.
-const LINK_TYPES = ['document', 'object', 'flow'];
+const LINK_TYPES = ['document', 'object', 'flow', 'url'];   // url: something outside Ordovia (id 0, the address in sub)
+/** Where a web address lives, in words: so people know what they are about to open. */
+function urlKind(href) {
+  let h = ''; try { h = new URL(href).hostname.toLowerCase(); } catch { return 'Web'; }
+  if (/(^|\.)sharepoint\.com$|(^|\.)sharepoint-df\.com$/.test(h)) return 'SharePoint';
+  if (/(^|\.)1drv\.ms$|(^|\.)onedrive\.live\.com$/.test(h)) return 'OneDrive';
+  if (/(^|\.)teams\.microsoft\.com$|(^|\.)teams\.live\.com$/.test(h)) return 'Teams';
+  if (/(^|\.)office\.com$|(^|\.)office365\.com$/.test(h)) return 'Microsoft 365';
+  if (/(^|\.)drive\.google\.com$|(^|\.)docs\.google\.com$/.test(h)) return 'Google Drive';
+  return 'Web';
+}
+function cleanUrl(u) { try { const x = new URL(String(u || '').trim()); return x.protocol === 'https:' && x.hostname.includes('.') ? x.href.slice(0, 500) : null; } catch { return null; } }
 const DOC_KIND_LABEL = { norm: 'Norm', policy: 'Policy', procedure: 'Procedure', instruction: 'Work instruction', template: 'Template', photo: 'Photo / drawing', other: 'Document' };
 const refKey = (r) => `${r.type}:${Number(r.id)}:${r.sub || ''}`;
-const cleanRef = (r) => ({ type: String((r || {}).type || ''), id: Number((r || {}).id), sub: (r || {}).sub ? String(r.sub).slice(0, 40) : null });
+const cleanRef = (r) => ({ type: String((r || {}).type || ''), id: Number((r || {}).id), sub: (r || {}).sub ? String(r.sub).slice(0, (r || {}).type === 'url' ? 500 : 40) : null });
 
 /** What the ends of links look like to this user: label, kind, where it lives, a picture if it is one. Ends that are gone or not visible come back with gone: true. */
 async function describeRefs(c, refs) {
@@ -1437,7 +1448,10 @@ async function describeRefs(c, refs) {
   const flows = new Map((flowIds.length ? await all(c.db, `SELECT id, name, graph, status FROM flows WHERE id IN (${qs(flowIds)})`, ...flowIds) : []).map(f => [f.id, f]));
   for (const r of refs) {
     let info = { type: r.type, id: r.id, sub: r.sub || null, gone: true, label: '(removed)', kind: '', href: '', image: null, sub_label: '' };
-    if (r.type === 'document') {
+    if (r.type === 'url') {
+      const u = cleanUrl(r.sub);
+      if (u) info = { ...info, gone: false, label: r.title || new URL(u).hostname, kind: urlKind(u), href: u, external: true };
+    } else if (r.type === 'document') {
       const d = docs.get(r.id);
       if (d && (d.status !== 'archived' || c.user.is_admin)) info = { ...info, gone: false, label: d.name, kind: DOC_KIND_LABEL[d.kind] || 'Document', href: '#/documents/' + d.id, image: d.mime && /^image\//.test(d.mime) ? d.file_id : null, file_id: d.file_id };
     } else if (r.type === 'object') {
@@ -1461,7 +1475,7 @@ async function linksOf(c, ref, vars) {
   const sub = ref.sub || null;
   const rowsOut = await all(c.db, 'SELECT * FROM links WHERE a_type = ? AND a_id = ? AND a_sub IS ? ORDER BY id', ref.type, ref.id, sub);
   const rowsIn = await all(c.db, 'SELECT * FROM links WHERE b_type = ? AND b_id = ? AND b_sub IS ? ORDER BY id', ref.type, ref.id, sub);
-  const outs = rowsOut.map(l => ({ linkId: l.id, note: l.note || '', showIf: l.show_if || '', ref: cleanRef({ type: l.b_type, id: l.b_id, sub: l.b_sub }) }));
+  const outs = rowsOut.map(l => ({ linkId: l.id, note: l.note || '', showIf: l.show_if || '', title: l.title || '', ref: cleanRef({ type: l.b_type, id: l.b_id, sub: l.b_sub }) }));
   const ins = rowsIn.map(l => ({ linkId: l.id, note: l.note || '', showIf: l.show_if || '', ref: cleanRef({ type: l.a_type, id: l.a_id, sub: l.a_sub }) }));
   if (ref.type === 'flow' && sub) {   // documents chosen at this step in the designer
     const fl = await first(c.db, 'SELECT graph FROM flows WHERE id = ?', ref.id);
@@ -1472,7 +1486,7 @@ async function linksOf(c, ref, vars) {
     for (const fl of await all(c.db, "SELECT id, graph FROM flows WHERE status = 'active'")) for (const n of parse(fl.graph, { nodes: [] }).nodes) if ((n.docIds || []).map(Number).includes(ref.id)) ins.push({ linkId: null, derived: true, note: String((n.docSections || {})[ref.id] || ''), showIf: '', ref: cleanRef({ type: 'flow', id: fl.id, sub: n.id }) });
   }
   const m = await describeRefs(c, [...outs, ...ins].map(x => x.ref));
-  const build = (list, hide) => list.map(x => ({ ...m.get(refKey(x.ref)), linkId: x.linkId, derived: !!x.derived, note: x.note, showIf: x.showIf }))
+  const build = (list, hide) => list.map(x => ({ ...m.get(refKey(x.ref)), ...(x.ref.type === 'url' && x.title ? { label: x.title } : {}), linkId: x.linkId, derived: !!x.derived, note: x.note, showIf: x.showIf }))
     .filter(x => (!x.gone || c.user.is_admin) && !(hide && x.showIf && !FB.expr.truthy(FB.expr.safe(x.showIf, vars, false))));
   return { out: build(outs, !!vars), in: build(ins, false) };
 }
@@ -1493,18 +1507,24 @@ route('POST', '/api/links', async (c) => {
   const b = await c.body(), a = cleanRef(b.a), t = cleanRef(b.b);
   for (const r of [a, t]) {
     if (!LINK_TYPES.includes(r.type) || !Number.isInteger(r.id)) throw new HttpError(400, 'Unknown item');
-    if (r.sub && r.type !== 'flow') throw new HttpError(400, 'Only a process has steps');
+    if (r.sub && r.type !== 'flow' && r.type !== 'url') throw new HttpError(400, 'Only a process has steps');
+  }
+  if (a.type === 'url') throw new HttpError(400, 'A link starts from an item in Ordovia; the web address is where it points to.');
+  if (t.type === 'url') {
+    const u = cleanUrl(t.sub);
+    if (!u) throw new HttpError(400, 'Use a full web address starting with https:// (for example a SharePoint, OneDrive or Teams link).');
+    t.sub = u; t.id = 0;
   }
   if (refKey(a) === refKey(t)) throw new HttpError(400, 'An item cannot be linked to itself');
   if (!(await canEditLink(c, a, t))) throw new HttpError(403, 'Only an administrator or the owner of the document can link it');
   const m = await describeRefs(c, [a, t]);
   if (m.get(refKey(a)).gone || m.get(refKey(t)).gone) throw new HttpError(404, 'One of the two items does not exist');
-  const note = String(b.note || '').trim().slice(0, 120), showIf = String(b.showIf || '').trim().slice(0, 300);
+  const note = String(b.note || '').trim().slice(0, 120), showIf = String(b.showIf || '').trim().slice(0, 300), title = String(b.title || '').trim().slice(0, 120);
   if (showIf) { const er = FB.expr.check(showIf); if (er) throw new HttpError(400, 'Condition: ' + er); }
   if (await first(c.db, 'SELECT 1 FROM links WHERE a_type = ? AND a_id = ? AND a_sub IS ? AND b_type = ? AND b_id = ? AND b_sub IS ?', a.type, a.id, a.sub, t.type, t.id, t.sub)) throw new HttpError(409, 'These two are already linked');
   if ((await first(c.db, 'SELECT count(*) AS n FROM links WHERE a_type = ? AND a_id = ?', a.type, a.id)).n >= 200) throw new HttpError(400, 'Too many links on one item');
-  const id = await run(c.db, 'INSERT INTO links(a_type, a_id, a_sub, b_type, b_id, b_sub, note, show_if, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', a.type, a.id, a.sub, t.type, t.id, t.sub, note || null, showIf || null, c.user.id, now());
-  await logAudit(c, 'linked', a.type, a.id, m.get(refKey(a)).label, '→ ' + m.get(refKey(t)).label + (note ? ' (' + note + ')' : ''));
+  const id = await run(c.db, 'INSERT INTO links(a_type, a_id, a_sub, b_type, b_id, b_sub, note, show_if, title, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)', a.type, a.id, a.sub, t.type, t.id, t.sub, note || null, showIf || null, title || null, c.user.id, now());
+  await logAudit(c, 'linked', a.type, a.id, m.get(refKey(a)).label, '→ ' + (title || m.get(refKey(t)).label) + (note ? ' (' + note + ')' : ''));
   return { id };
 });
 route('DELETE', '/api/links/:id', async (c, { id }) => {
