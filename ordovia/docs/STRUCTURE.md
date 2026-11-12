@@ -64,3 +64,6 @@ Home shows the person's tasks first (relative due dates), then starting a proces
 
 ## Describe with AI (built)
 No AI service and no key: Build › Describe with AI. The user describes a process; the app writes a prompt (format with an example, rules, the formula language, the workspace's areas, tags, person attributes and existing forms); the user pastes it into any AI (Copilot, ChatGPT, Claude) and pastes the JSON answer back. `src/bundle.js` extracts the JSON (fences, smart quotes, trailing commas), resolves every name against the workspace, checks every formula, refuses webhook steps, and returns a plan; `/api/admin/ai/preview` summarises it (or lists plain-language problems, with a "copy a message for the AI" button), `/api/admin/ai/apply` creates missing tags, forms (draft) and processes (draft, auto-layout). 154 smoke checks include an AI-built leave process that really runs end to end.
+
+## Governance: everything has a home (built)
+New forms start as drafts. Forms, processes and documents cannot become active without an area (409 "Choose an area first…"); documents need an area from the start. Health now also finds: person-attribute rules nobody satisfies, documents linked to nothing, classes without objects or processes, processes unused for six months (archive?), and near-duplicate names of processes, forms and documents.

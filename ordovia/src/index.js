@@ -13,6 +13,7 @@ import { extractJSON, planBundle, resolve, FIELD_TYPES } from './bundle.js';
 import { seedDemo, resetDemo, DEMO_ADMIN, DEMO_PASSWORD } from './seed.js';
 
 const SESSION_DAYS = 14;
+const NEEDS_HOME = 'Choose an area first: every active item belongs to a department, so nothing is left loose.';
 const routes = [];
 const route = (method, path, handler, opts = {}) => {
   const keys = [];
@@ -619,7 +620,7 @@ route('POST', '/api/admin/forms', async (c) => {
   if (!name) throw new HttpError(400, 'Name required');
   let slug = slugify(name), n = 2;
   while (await first(c.db, 'SELECT 1 FROM forms WHERE slug = ?', slug)) slug = slugify(name) + '_' + n++;
-  const id = await run(c.db, 'INSERT INTO forms(name, slug, description, fields, access, area_id, status, owner_id, updated_at) VALUES (?,?,?,?,?,?,?,?,?)', name, slug, '', '[]', '{}', await areaOf(c, b.area_id), 'active', c.user.id, now());
+  const id = await run(c.db, 'INSERT INTO forms(name, slug, description, fields, access, area_id, status, owner_id, updated_at) VALUES (?,?,?,?,?,?,?,?,?)', name, slug, '', '[]', '{}', await areaOf(c, b.area_id), 'draft', c.user.id, now());
   await c.db.batch(formViewSQL({ id, slug, fields: [] }).map(s => c.db.prepare(s)));
   return { id };
 }, { admin: true });
@@ -635,6 +636,7 @@ route('PUT', '/api/admin/forms/:id', async (c, { id }) => {
   }
   const problems = FB.logic.lint(form);
   if (problems.length) throw new HttpError(400, problems[0], { problems });
+  if (form.status === 'active' && old.status !== 'active' && !form.area_id) throw new HttpError(409, NEEDS_HOME);
   await c.db.batch([
     c.db.prepare('UPDATE forms SET name = ?, description = ?, fields = ?, checks = ?, access = ?, area_id = ?, status = ?, owner_id = ?, is_class = ?, updated_at = ? WHERE id = ?')
       .bind(form.name, form.description, JSON.stringify(form.fields), JSON.stringify(form.checks), JSON.stringify(form.access), form.area_id, form.status, form.owner_id, form.is_class ? 1 : 0, now(), form.id),
@@ -688,6 +690,7 @@ route('PUT', '/api/admin/flows/:id', async (c, { id }) => {
   const allForms = await c.forms();
   const issues = FB.logic.lintFlow(graphObj, allForms.filter(x => x.status !== 'archived').map(x => x.id), allForms);
   let status = cleanStatus(b.status, f.status), note = '';
+  if (status === 'active' && f.status !== 'active' && !(b.area_id === undefined ? f.area_id : b.area_id)) throw new HttpError(409, NEEDS_HOME);
   if (status === 'active' && issues.length) {
     if (f.status === 'active') { status = 'draft'; note = 'Saved as draft: an active process may not have open issues (' + issues[0] + ')'; }
     else throw new HttpError(400, 'Fix the issues before activating this process: ' + issues[0], { issues });
@@ -904,7 +907,12 @@ route('GET', '/api/admin/health', async (c) => {
   const liveForms = forms.filter(f => f.status !== 'archived');
   const flows = await all(c.db, 'SELECT * FROM flows WHERE status != ? ORDER BY name', 'archived');
   const docs = await all(c.db, 'SELECT * FROM documents'), docById = new Map(docs.map(d => [d.id, d]));
+  // what is connected to what: a document counts as used when a step, a link or an object refers to it
+  const usedDocs = new Set();
+  for (const f of flows) for (const n of parse(f.graph, { nodes: [] }).nodes) (n.docIds || []).forEach(x => usedDocs.add(Number(x)));
+  for (const l of await all(c.db, "SELECT a_type, a_id, b_type, b_id FROM links")) { if (l.a_type === 'document') usedDocs.add(l.a_id); if (l.b_type === 'document') usedDocs.add(l.b_id); }
   for (const d of docs.filter(x => x.status === 'active')) {
+    if (!usedDocs.has(d.id) && d.created_at && d.created_at < new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10)) add('info', 'unlinked', 'Document “' + d.name + '” is not linked to anything', 'Link it to a process step or an object where it matters, or archive it', '#/documents/' + d.id);
     const due = reviewDueAt(d), link = '#/documents/' + d.id;
     if (due && due < today) add('warn', 'review', 'Document “' + d.name + '” is due for review', 'Review was due ' + due, link);
     if (!d.owner_id) add('warn', 'ownership', 'Document “' + d.name + '” has no owner', '', link);
@@ -920,6 +928,7 @@ route('GET', '/api/admin/health', async (c) => {
     for (const n of g.nodes.filter(x => x.type === 'task')) {
       const rule = n.assignee || { type: 'initiator' };
       if (rule.type === 'person' && !(D.persons.get(Number(rule.personId)) || {}).active) add(f.status === 'active' ? 'error' : 'warn', 'routing', f.name + ' · “' + n.name + '” goes to a person who is gone or inactive', D.describe(rule), link);
+      if (rule.type === 'attr' && rule.key && ![...D.persons.values()].some(p => p.active && D.matches(p.id, rule, null))) add(f.status === 'active' ? 'error' : 'warn', 'routing', f.name + ' · “' + n.name + '” has nobody to go to', 'Nobody has ' + D.describe(rule).toLowerCase() + ' (People & tags › Attributes)', link);
       if (rule.type === 'tags' && (rule.tagIds || []).length && ![...D.persons.values()].some(p => p.active && D.hasTags(p.id, rule.tagIds))) add(f.status === 'active' ? 'error' : 'warn', 'routing', f.name + ' · “' + n.name + '” has nobody to go to', 'No active person matches: ' + D.describe(rule), link);
     }
     for (const u of unknownVariables(g, forms)) add(f.status === 'active' ? 'warn' : 'info', 'data', f.name + ': “' + u.name + '” is used in ' + u.where + ' but no earlier step provides it', u.hint ? 'Did you mean ' + u.hint + '?' : 'Check the spelling, or add a form field or calculation with this name', link);
@@ -936,6 +945,22 @@ route('GET', '/api/admin/health', async (c) => {
     if (!usedForms.has(f.id) && !n && f.updated_at && f.updated_at < new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10)) add('info', 'unused', f.name + ' is not used anywhere', 'No process uses it and it has no records – archive it?', '#/admin/forms/' + f.id);
     if (!f.area_id) add('info', 'structure', f.name + ' (form) is in no area', '', '#/admin/forms/' + f.id, { entity: 'form', id: f.id });
   }
+  // classes nobody uses; processes nobody runs; things that look like the same thing twice
+  for (const f of liveForms.filter(x => x.is_class)) {
+    const n = (await first(c.db, 'SELECT count(*) AS n FROM submissions WHERE form_id = ?', f.id)).n;
+    const worked = flows.some(fl => parse(fl.graph, { nodes: [] }).nodes.some(x => x.type === 'start' && Number(x.subjectForm) === f.id));
+    if (!n && !worked) add('info', 'unused', 'Class “' + f.name + '” has no objects and no process works on it', 'Add objects, let a process work on it, or archive it', '#/admin/forms/' + f.id);
+  }
+  for (const f of flows.filter(x => x.status === 'active')) {
+    const last = (await first(c.db, 'SELECT max(created_at) AS m FROM instances WHERE flow_id = ?', f.id)).m, cut = new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10);
+    if ((f.updated_at || '') < cut && (!last || last < cut)) add('info', 'quiet', f.name + ' has not been used for six months', 'Still needed? If not, archive it to keep the workspace tidy', '#/admin/flows/' + f.id);
+  }
+  const simKey = (x) => String(x).toLowerCase().replace(/[^a-z0-9]+/g, '').replace(/s$/, '');
+  const near = (a, b) => { if (a === b) return true; if (a.length < 6 || b.length < 6 || Math.abs(a.length - b.length) > 1) return false; let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(i + 1) === b.slice(i + 1) || a.slice(i + 1) === b.slice(i) || a.slice(i) === b.slice(i + 1); };
+  const twins = (kind, items, link) => { for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) if (near(simKey(items[i].name), simKey(items[j].name))) add('info', 'duplicate', 'These look like the same ' + kind + ': “' + items[i].name + '” and “' + items[j].name + '”', 'Keep one and archive the other, so people do not pick the wrong one', link(items[i])); };
+  twins('process', flows.filter(x => x.status !== 'archived'), x => '#/admin/flows/' + x.id);
+  twins('form', liveForms, x => '#/admin/forms/' + x.id);
+  twins('document', docs.filter(x => x.status !== 'archived'), x => '#/documents/' + x.id);
   const stuck = await all(c.db, "SELECT id, title FROM instances WHERE status = 'stuck' LIMIT 20");
   stuck.forEach(i => add('error', 'run', 'Process run “' + i.title + '” is stuck', 'No arrow matched – fix the flow, then delete the run', '#/processes/' + i.id));
   const overdue = await all(c.db, "SELECT t.id, t.name, i.title, t.due_at FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE t.status = 'open' AND t.due_at < ? ORDER BY t.due_at LIMIT 20", now());
@@ -1278,6 +1303,7 @@ async function saveDocument(c, id, b) {
   const months = b.review_months === undefined ? (old ? old.review_months : 12) : Math.max(0, Math.min(60, Math.floor(Number(b.review_months)) || 0));
   const area = b.area_id === undefined ? (old ? old.area_id : null) : await areaOf(c, b.area_id);
   const owner = b.owner_id === undefined ? (old ? old.owner_id : c.user.id) : await personOf(c, b.owner_id);
+  if (!(b.area_id === undefined ? (old && old.area_id) : b.area_id)) throw new HttpError(400, 'Choose an area first: every document belongs to a department.');
   const status = cleanStatus(b.status, old ? old.status : 'active'), desc = String(b.description === undefined ? (old ? old.description : '') : b.description || '').slice(0, 1000);
   const folder = b.folder === undefined ? (old ? old.folder : null) : cleanFolder(b.folder);
   if (old) { await run(c.db, 'UPDATE documents SET name = ?, kind = ?, description = ?, area_id = ?, folder = ?, owner_id = ?, status = ?, review_months = ?, updated_at = ? WHERE id = ?', name, kind, desc, area, folder, owner, status, months, now(), old.id); return { id: old.id }; }

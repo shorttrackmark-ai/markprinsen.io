@@ -62,7 +62,7 @@ r = await post('/api/admin/sql', { sql: "update settings set value = value where
 console.log('request forms, public web form, API');
 {
   // a request form + a process that uses it as its input, open as a public web form, with a task for Eva (Finance)
-  r = await post('/api/admin/forms', { name: 'Quote request' }); const qfId = r.data.id;
+  r = await post('/api/admin/forms', { name: 'Quote request', area_id: salesId }); const qfId = r.data.id;
   r = await get('/api/admin/forms/' + qfId); const qf = r.data.form;
   qf.fields = [{ key: 'company', label: 'Company', type: 'text', required: true }, { key: 'amount', label: 'Amount', type: 'number', required: true, min: 1 }, { key: 'note', label: 'Note', type: 'text' }];
   r = await put('/api/admin/forms/' + qfId, { ...qf }); ok(r.status === 200, 'create the request form', r.data);
@@ -70,7 +70,7 @@ console.log('request forms, public web form, API');
   const approval = (await get('/api/meta')).data.forms.find(f => f.name === 'Approval');
   const graph = { nodes: [{ id: 's', type: 'start', name: 'Start', formId: qfId, publicEnabled: true, title: '"Quote " & company' }, { id: 't', type: 'task', name: 'Check the quote', formId: approval.id, assignee: { type: 'person', personId: eva.id } }, { id: 'e', type: 'end', name: 'Done' }],
     edges: [{ id: 'e1', from: 's', to: 't' }, { id: 'e2', from: 't', to: 'e' }] };
-  r = await post('/api/admin/flows', { name: 'Quote' }); const qId = r.data.id;
+  r = await post('/api/admin/flows', { name: 'Quote', area_id: salesId }); const qId = r.data.id;
   r = await put('/api/admin/flows/' + qId, { name: 'Quote', description: 'Ask Finance for a quote', graph, doc: {}, status: 'active' }); ok(r.status === 200 && r.data.status === 'active', 'activate a process with a request form', r.data);
   const token = r.data.graph.nodes[0].publicToken; ok(/^[a-f0-9]{24}$/.test(token || ''), 'the server made a public link token', token);
   // public: no login
@@ -132,7 +132,7 @@ console.log('files, documents, formats');
   r = await get('/api/search?q=quality'); ok(r.data.results.some(x => x.type === 'Document'), 'search finds documents');
   r = await del('/api/admin/documents/' + docId); ok(r.status === 409, 'documents are archived before they are deleted');
   // a file field and formats in a form
-  r = await post('/api/admin/forms', { name: 'Supplier invoice' }); const invId = r.data.id; r = await get('/api/admin/forms/' + invId); const inv = r.data.form;
+  r = await post('/api/admin/forms', { name: 'Supplier invoice', area_id: salesId }); const invId = r.data.id; r = await get('/api/admin/forms/' + invId); const inv = r.data.form;
   inv.fields = [{ key: 'iban', label: 'IBAN', type: 'text', format: 'iban', required: true }, { key: 'postcode', label: 'Postcode', type: 'text', format: 'postcode_nl' }, { key: 'ref', label: 'Reference', type: 'text', pattern: '^INV-[0-9]{4}$', patternMsg: 'INV-1234' }, { key: 'pdf', label: 'Invoice', type: 'file', required: true }];
   r = await put('/api/admin/forms/' + invId, { ...inv, access: { direct: true } }); ok(r.status === 200, 'a form with a file field and formats', r.data);
   r = await up('invoice.pdf', 'PDFDATA', 'application/pdf'); const pf = r.data.id;
@@ -145,10 +145,10 @@ console.log('files, documents, formats');
   r = await dl(pf); ok(r.status === 200 && r.text === 'PDFDATA' && r.headers.get('content-type') === 'application/pdf', 'the record\'s file opens');
   // public forms cannot have file fields
   { const g2 = { nodes: [{ id: 's', type: 'start', name: 'Start', formId: invId, publicEnabled: true }, { id: 'e', type: 'end', name: 'Done' }], edges: [{ id: 'x', from: 's', to: 'e' }] };
-    r = await post('/api/admin/flows', { name: 'Public invoice' }); const pid = r.data.id; r = await put('/api/admin/flows/' + pid, { name: 'Public invoice', description: '', graph: g2, doc: {}, status: 'active' }); ok(r.status === 400 && /File/.test(JSON.stringify(r.data)), 'a public web form cannot have a file field', r.data); }
+    r = await post('/api/admin/flows', { name: 'Public invoice', area_id: salesId }); const pid = r.data.id; r = await put('/api/admin/flows/' + pid, { name: 'Public invoice', description: '', graph: g2, doc: {}, status: 'active' }); ok(r.status === 400 && /File/.test(JSON.stringify(r.data)), 'a public web form cannot have a file field', r.data); }
   // typos in formulas are reported
   { const g3 = { nodes: [{ id: 's', type: 'start', name: 'Start' }, { id: 'a', type: 'action', name: 'Calc', assignments: 'total = amout * 2' }, { id: 'e', type: 'end', name: 'Done' }], edges: [{ id: 'x', from: 's', to: 'a' }, { id: 'y', from: 'a', to: 'e' }] };
-    r = await post('/api/admin/flows', { name: 'Typo test' }); const tid = r.data.id; await put('/api/admin/flows/' + tid, { name: 'Typo test', description: '', graph: g3, doc: {}, status: 'draft' });
+    r = await post('/api/admin/flows', { name: 'Typo test', area_id: salesId }); const tid = r.data.id; await put('/api/admin/flows/' + tid, { name: 'Typo test', description: '', graph: g3, doc: {}, status: 'draft' });
     r = await get('/api/admin/health'); ok(r.data.items.some(i => /“amout” is used/.test(i.title)), 'health reports a variable nobody provides', r.data.items.filter(i => i.kind === 'data')); }
   // someone else cannot read a loose upload
   r = await up('secret.txt', 'secret'); const sec = r.data.id;
@@ -283,6 +283,23 @@ console.log('describe with AI');
   r = await post('/api/tasks/' + mt.id + '/complete', { data: { decision: 'Approve' } }); ok(r.status === 200, 'the manager approves');
   r = await get('/api/instances/' + aiRun); ok(r.data.instance.status === 'done' && r.data.instance.outcome === 'Approved', 'the case ends as Approved: the AI-built process really runs', r.data.instance);
   cookie = adminCookie;
+}
+
+console.log('governance: everything has a home');
+{
+  r = await post('/api/admin/forms', { name: 'Order form' }); const fa = r.data.id;
+  r = await get('/api/admin/forms/' + fa); const fform = r.data.form; ok(fform.status === 'draft', 'a new form is a draft');
+  r = await put('/api/admin/forms/' + fa, { name: fform.name, description: '', fields: [{ key: 'item', label: 'Item', type: 'text' }], checks: [], access: {}, status: 'active' }); ok(r.status === 409 && /area/i.test(r.data.error), 'a form cannot be activated without an area', r.data);
+  r = await put('/api/admin/forms/' + fa, { name: fform.name, description: '', fields: [{ key: 'item', label: 'Item', type: 'text' }], checks: [], access: {}, status: 'active', area_id: salesId }); ok(r.status === 200, 'with an area it can');
+  r = await post('/api/admin/flows', { name: 'Loose process' }); const lf = r.data.id; { const fl = (await get('/api/admin/flows/' + lf)).data;
+    r = await put('/api/admin/flows/' + lf, { name: fl.name, description: '', graph: fl.graph, doc: {}, status: 'active' }); ok(r.status === 409 && /area/i.test(r.data.error), 'a process cannot be activated without an area', r.data); }
+  r = await post('/api/admin/documents', { name: 'Loose document', kind: 'other', fileId: 1 }); ok(r.status === 400 && /area/i.test(r.data.error), 'a document needs an area', r.data);
+  // things that look like the same thing, and classes nobody uses
+  r = await post('/api/admin/forms', { name: 'Order forms', area_id: salesId }); const fb = r.data.id;
+  r = await post('/api/admin/forms', { name: 'Unused class', area_id: salesId }); const fc = r.data.id; { const f = (await get('/api/admin/forms/' + fc)).data.form; await put('/api/admin/forms/' + fc, { name: f.name, description: '', fields: [{ key: 'n', label: 'Name', type: 'text' }], checks: [], access: {}, status: 'active', area_id: salesId, is_class: 1 }); }
+  r = await get('/api/admin/health'); const hi = r.data.items;
+  ok(hi.some(i => i.kind === 'duplicate' && /Order form/.test(i.title)), 'Health notices two forms that look like the same thing', hi.filter(i => i.kind === 'duplicate').map(i => i.title));
+  ok(hi.some(i => i.kind === 'unused' && /Unused class/.test(i.title)), 'Health notices a class nobody uses');
 }
 
 console.log('as a colleague');

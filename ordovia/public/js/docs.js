@@ -58,7 +58,7 @@
     const m = modal('Upload document', `<form id="ndf"><label>File <small class="muted">(PDF, Word, Excel, PowerPoint, image or text; up to 10 MB)</small><input type="file" name="file" required></label>
       <label>Name<input name="name" required placeholder="e.g. ISO 9001 – quality manual"></label>
       <div class="row2"><label>Kind<select name="kind">${KINDS.map(k => `<option value="${k[0]}">${esc(k[1])}</option>`).join('')}</select></label>
-      <label>Area<select name="area_id"><option value="">– none –</option>${areas().map(a => `<option value="${a.id}" ${a.id === areaId ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label></div>
+      <label>Area <small class="muted">(who it belongs to)</small><select name="area_id" required><option value="">– choose –</option>${areas().map(a => `<option value="${a.id}" ${a.id === areaId ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label></div>
       <div class="row2"><label>Owner<select name="owner_id">${people().map(p => `<option value="${p.id}" ${p.id === FB.state.user.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
       <label>Review every<span class="inline-unit"><input type="number" name="review_months" min="0" max="60" value="12"> months</span></label></div>
       <label>Folder <small class="muted">(optional; use “Quality / ISO 9001” for a sub-folder)</small><input name="folder" list="dcFolders" maxlength="90" placeholder="e.g. Quality">${folderList()}</label>
