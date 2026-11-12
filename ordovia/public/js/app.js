@@ -395,7 +395,7 @@
     };
     FB.org.filters($('#fmFilters', main), st, { status: true, placeholder: 'Search forms…' }, draw);
     draw();
-    $('#nf', main).onclick = async () => { const n = prompt('Form name', 'New form'); if (n && n.trim()) { const r = await api.post('/admin/forms', { name: n.trim(), area_id: st.area && st.area !== 'none' ? Number(st.area) : null }); await FB.loadMeta(); FB.go('#/admin/forms/' + r.id); } };
+    $('#nf', main).onclick = () => FB.org.newItem('New form', { placeholder: 'e.g. Expense details', area_id: st.area && st.area !== 'none' ? Number(st.area) : null }, async ({ name, area_id }) => { const r = await api.post('/admin/forms', { name, area_id }); await FB.loadMeta(); FB.go('#/admin/forms/' + r.id); });
   }, { admin: true });
   FB.route('/admin/forms/:id', (main, { id }) => FB.forms.builder(main, Number(id)), { admin: true });
 
@@ -429,7 +429,7 @@
     };
     FB.org.filters($('#flFilters', main), st, { status: true, placeholder: 'Search flows…' }, draw);
     draw();
-    $('#nf', main).onclick = async () => { const n = prompt('Flow name', 'New process'); if (n && n.trim()) { const r = await api.post('/admin/flows', { name: n.trim(), area_id: st.area && st.area !== 'none' ? Number(st.area) : null }); FB.go('#/admin/flows/' + r.id); } };
+    $('#nf', main).onclick = () => FB.org.newItem('New process', { placeholder: 'e.g. Expense claim', area_id: st.area && st.area !== 'none' ? Number(st.area) : null }, async ({ name, area_id }) => { const r = await api.post('/admin/flows', { name, area_id }); FB.go('#/admin/flows/' + r.id); });
   }, { admin: true });
   FB.route('/admin/flows/:id', (main, { id }) => FB.flows.designer(main, Number(id)), { admin: true });
 

@@ -124,7 +124,7 @@
     FB.org.filters($('#dbFilters'), st, { status: FB.isAdmin(), placeholder: 'Search dashboards…' }, draw);
     draw();
     const n = $('#dNew');
-    if (n) n.onclick = async () => { const name = prompt('Dashboard name', 'New dashboard'); if (name) { const r = await FB.api.post('/admin/dashboards', { name }); FB.go('#/dashboards/' + r.id); } };
+    if (n) n.onclick = () => FB.org.newItem('New dashboard', { placeholder: 'e.g. Operations overview', noArea: true }, async ({ name }) => { const r = await FB.api.post('/admin/dashboards', { name }); FB.go('#/dashboards/' + r.id); });
   };
 
   Dash.page = async function (main, id) {

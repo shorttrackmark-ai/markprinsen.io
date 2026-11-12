@@ -284,7 +284,8 @@
       }
       const n = g.nodes.find(x => x.id === sel.id); if (!n) { sel = null; drawProps(); return; }
       const a = n.assignee || { type: 'initiator' };
-      const formSel = (label) => `<label>${label}<select data-n="formId"><option value="">— choose form —</option>${forms.map(f => `<option value="${f.id}" ${Number(n.formId) === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>`;
+      const formSel = (label) => `<label>${label}<select data-n="formId"><option value="">— choose form —</option>${forms.filter(f => f.status !== 'archived').map(f => `<option value="${f.id}" ${Number(n.formId) === f.id ? 'selected' : ''}>${esc(f.name)}${f.status === 'draft' ? ' (draft)' : ''}</option>`).join('')}</select></label>
+        <div class="form-links">${n.formId ? '<button type="button" class="btn small" id="editForm">Edit this form</button>' : ''}<button type="button" class="btn small ghost" id="newForm">+ New form for this step</button></div>`;
       const target = n.formId ? forms.find(f => f.id === Number(n.formId)) : null;
       box.innerHTML = `<h4>${esc(NODE_TYPES[n.type].label)}</h4>
         <label>Name<input data-n="name" value="${esc(n.name)}"></label>
@@ -338,6 +339,15 @@
       drawSecs();
       const dd = $('[data-docs]', box); if (dd) dd.onchange = () => { n.docIds = [...dd.selectedOptions].map(o => Number(o.value)); if (!n.docIds.length) delete n.docIds; if (n.docSections) { for (const k of Object.keys(n.docSections)) if (!(n.docIds || []).includes(Number(k))) delete n.docSections[k]; if (!Object.keys(n.docSections).length) delete n.docSections; } touch(); drawSecs(); };
       const en = $('#enNotify', box); if (en) en.onchange = () => { if (en.checked) n.notifyUrl = ''; else { delete n.notifyUrl; delete n.notifyFormat; } touch(); drawProps(); };
+      const nf = $('#newForm', box), ef = $('#editForm', box);
+      if (nf) nf.onclick = async () => {   // a form for this step, named after it, in the process's area; add its fields next
+        try {
+          const r = await FB.api.post('/admin/forms', { name: n.name || 'New form', area_id: flow.area_id || null });
+          await FB.loadMeta(); forms.splice(0, forms.length, ...FB.state.meta.forms);
+          n.formId = r.id; touch(); draw(); drawProps(); toast('Form created. Choose “Edit this form” to add its fields.', 'ok');
+        } catch (e) { toast(e.message, 'error'); }
+      };
+      if (ef) ef.onclick = async () => { if (dirty) await save(); FB.go('#/admin/forms/' + n.formId); };
       const at = $('#aType', box);
       if (at) at.onchange = () => { n.assignee = { type: at.value }; if (at.value === 'person' && meta.people[0]) n.assignee.personId = meta.people[0].id; touch(); draw(); drawProps(); };
       const upd = () => {

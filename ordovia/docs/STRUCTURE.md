@@ -102,3 +102,6 @@ No messaging: if a reviewer must send work back, the process has a "Needs correc
 
 ## Quieter navigation (built)
 Menu for everyone: My tasks, Cases, Handbook, Data, Documents, Dashboards, Areas. Admin: Build (Flows, Forms, Templates, People & tags), Control (Health, Settings, and "More": API & web forms, Activity, SQL console). Objects live under Data (a class opens its objects; "Table view" shows the plain register); Describe with AI is reached from Flows and Templates. The Data page shows registers and objects by default; forms that exist only as steps of a process (kind "step", worked out from the flows: used as a task or request form and not as a record target or class) are one click away under "Forms of processes".
+
+## First-time builder fixes (iteration 12)
+New process / form / dashboard open a proper dialog (name, and the area it belongs to) instead of a browser prompt. In the designer a step's form can be created on the spot ("+ New form for this step": named after the step, in the process's area, as a draft) and opened with "Edit this form" (the process is saved first); archived forms are no longer offered.

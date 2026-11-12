@@ -61,6 +61,15 @@
     review: (it) => (it.reviewDue ? `<span class="${it.overdue ? 'warn-text' : ''}">${esc(String(it.reviewDue).slice(0, 10))}${it.overdue ? ' · overdue' : ''}</span>` : '<span class="muted">–</span>'),
   };
 
+  /** The dialog for making something new: a name (and the area it belongs to), instead of a browser prompt. create({ name, area_id }) does the work. */
+  Org.newItem = (title, o, create) => {
+    const m = modal(title, `<form id="niForm"><label>Name<input name="name" required maxlength="120" value="${esc(o.name || '')}" placeholder="${esc(o.placeholder || '')}" autocomplete="off"></label>
+      ${o.noArea ? '' : `<label>Area <small class="muted">(who it belongs to; needed before it can go live)</small><select name="area_id"><option value="">– choose later –</option>${areas().map(a => `<option value="${a.id}" ${a.id === o.area_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>`}
+      <div class="form-actions"><button class="btn primary">Create</button></div></form>`);
+    const f = $('#niForm', m.root); f.name.focus(); f.name.select();
+    f.onsubmit = async (e) => { e.preventDefault(); const b = $('button', f); b.disabled = true; try { await create({ name: f.name.value.trim(), area_id: f.area_id && f.area_id.value ? Number(f.area_id.value) : null }); m.close(); } catch (err) { toast(err.message, 'error'); b.disabled = false; } };
+  };
+
   /** A filter bar (search, area, status). `state` = { q, area, status }; calls onChange() when it changes. */
   Org.filters = (host, state, opts, onChange) => {
     opts = opts || {};
