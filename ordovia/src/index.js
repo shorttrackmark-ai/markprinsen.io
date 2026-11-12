@@ -442,13 +442,14 @@ route('GET', '/api/instances/:id', async (c, { id }) => {
   if (!raw) throw new HttpError(404, 'Process not found');
   if (!(await canSeeInstance(c, raw))) throw new HttpError(403, 'No access to this process');
   const D = await c.dir();
-  const [info, tasks, events] = await Promise.all([
+  const [info, tasks, events, subs] = await Promise.all([
     first(c.db, 'SELECT * FROM v_instances WHERE id = ?', raw.id),
     all(c.db, 'SELECT t.id, t.name, t.node_id, t.status, t.assignee, t.due_at, t.completed_at, p.name AS who FROM tasks t LEFT JOIN persons p ON p.id = t.completed_by WHERE instance_id = ? ORDER BY t.id', raw.id),
     all(c.db, 'SELECT message, created_at FROM events WHERE instance_id = ? ORDER BY id', raw.id),
+    all(c.db, 'SELECT s.id, s.form_id, s.task_id, s.data, s.created_at, p.name AS who FROM submissions s LEFT JOIN persons p ON p.id = s.person_id WHERE s.instance_id = ? ORDER BY s.id', raw.id),
   ]);
   const subject = raw.subject_form_id ? { formId: raw.subject_form_id, id: raw.subject_id, form: ((await c.formsMap()).get(raw.subject_form_id) || {}).name || '', label: (parse(raw.vars, {}).subject || {}).label || ('#' + raw.subject_id) } : null;
-  return { instance: info, subject, graph: parse(raw.graph, { nodes: [], edges: [] }), vars: parse(raw.vars, {}), events,
+  return { instance: info, subject, version: raw.flow_version, reference: raw.external_ref, submissions: subs.map(x => ({ ...x, data: parse(x.data, {}) })), graph: parse(raw.graph, { nodes: [], edges: [] }), vars: parse(raw.vars, {}), events,
     tasks: tasks.map(t => ({ ...t, assignee: D.describe(parse(t.assignee, {})) })) };
 });
 

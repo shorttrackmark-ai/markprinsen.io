@@ -43,7 +43,14 @@
     if (!rows.length) { host.innerHTML = `<p class="muted register-empty">${opts.empty || 'Nothing here yet.'}</p>`; return; }
     host.innerHTML = `<div class="table-wrap"><table class="grid register"><thead><tr>${cols.map((c, i) => `<th class="${c.cls || ''} sortable ${i === sortState.i ? (sortState.dir > 0 ? 'asc' : 'desc') : ''}" data-col="${i}" aria-sort="${i === sortState.i ? (sortState.dir > 0 ? 'ascending' : 'descending') : 'none'}">${esc(c.label)}</th>`).join('')}</tr></thead>
       <tbody>${rows.map((it, r) => `<tr ${opts.href ? `class="clickable" data-href="${esc(opts.href(it))}"` : ''}>${cols.map(c => `<td class="${c.cls || ''}">${c.cell(it)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
-      <p class="reg-foot small muted">${rows.length} ${rows.length === 1 ? (opts.one || 'item') : (opts.many || 'items')}${opts.total && opts.total !== rows.length ? ` of ${opts.total}` : ''}</p>`;
+      <p class="reg-foot small muted">${rows.length} ${rows.length === 1 ? (opts.one || 'item') : (opts.many || 'items')}${opts.total && opts.total !== rows.length ? ` of ${opts.total}` : ''} · <button type="button" class="link-btn" data-csv>Export CSV</button></p>`;
+    const csv = $('[data-csv]', host);
+    if (csv) csv.onclick = () => {   // what is on screen, as a spreadsheet
+      const tmp = document.createElement('div');
+      const text = (html) => { tmp.innerHTML = html; return tmp.textContent.replace(/\s+/g, ' ').trim(); };
+      const heads = cols.map(c => c.label), named = cols.map((c, i) => (c.label ? i : -1)).filter(i => i >= 0);
+      FB.ui.download((opts.csv || 'export') + '.csv', FB.ui.toCSV(named.map(i => heads[i]), rows.map(it => named.map(i => text(String(cols[i].cell(it)))))), 'text/csv');
+    };
     $$('th.sortable', host).forEach(th => th.onclick = () => { const i = Number(th.dataset.col); sortState.dir = sortState.i === i ? -sortState.dir : 1; sortState.i = i; Org.register(host, items, cols, opts); if (opts.after) opts.after(); });
     if (opts.href) $$('tbody tr[data-href]', host).forEach(tr => tr.onclick = (e) => { if (e.target.closest('a, button, input, select')) return; location.hash = tr.dataset.href; });
   };

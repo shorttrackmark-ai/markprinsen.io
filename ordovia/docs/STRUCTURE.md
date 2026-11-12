@@ -75,3 +75,6 @@ Build › Templates: 11 ready-made processes in five packs (Health & safety: inc
 - **Absence cover:** "I'm away…" on My tasks (and Absence in the people dialog): until a date, the chosen deputy receives the tasks that would go to the absent person (`D.covering`, migration 0008).
 - **Escalation:** the hourly job flags an overdue task once and also hands it to the process owner (`tasks.escalated_at`), who sees it marked "overdue – handed to you", may complete or reassign it; the timeline records it. Process owners can also open the cases of their processes.
 - **Reassign:** owner or administrator, to any active person, recorded in the timeline. `POST /api/admin/overdue-check` runs the same check on demand.
+
+## Case report and CSV export (built)
+Cases › a case › Report: a print-ready record (summary with process version, route diagram, steps with who/when, the information entered per step, the full timeline) for auditors and files; print or save as PDF from the browser. Every register has "Export CSV" (what is on screen).

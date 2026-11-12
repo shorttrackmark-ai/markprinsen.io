@@ -351,6 +351,12 @@ console.log('cover for absence, escalation, reassigning');
   cookie = adminCookie;
 }
 
+console.log('case report');
+{
+  const done = (await get('/api/instances?status=done')).data[0];
+  r = await get('/api/instances/' + done.id); ok(r.data.version >= 1 && Array.isArray(r.data.submissions) && r.data.submissions.length >= 1 && r.data.submissions[0].data && r.data.tasks.length >= 1 && r.data.events.length >= 1, 'a case carries everything a report needs: version, entered information, steps, timeline', Object.keys(r.data));
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');
