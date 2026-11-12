@@ -24,6 +24,7 @@
       ${link('#/data', '▦', 'Data', '/data')}
       ${link('#/dashboards', '▣', 'Dashboards', '/dashboards')}</div>
       ${FB.isAdmin() ? `<div class="nav-title">Build</div><div class="nav-group">
+      ${link('#/admin/ai', '✦', 'Describe with AI', '/admin/ai')}
       ${link('#/admin/flows', '⇄', 'Flows', '/admin/flows')}
       ${link('#/admin/forms', '☰', 'Forms', '/admin/forms')}
       ${link('#/admin/areas', '◫', 'Manage areas')}
@@ -126,7 +127,7 @@
       ${FB.isAdmin() && !h.flows.length ? `<section class="card getting-started"><h2>Let's set up your first process</h2>
         <ol class="gs-steps"><li><b>Departments.</b> Group everything by who it belongs to. <button class="btn small" id="gsAreas">Add typical departments</button> <a class="btn small ghost" href="#/admin/areas">Or create your own</a></li>
         <li><b>People.</b> Add your colleagues and give them tags (department, function) so tasks reach the right person. <a class="btn small" href="#/admin/people">Add people</a></li>
-        <li><b>A process.</b> Draw the steps, say who does each one and what they fill in. <a class="btn small primary" href="#/admin/flows">Build a process</a></li></ol>
+        <li><b>A process.</b> Draw the steps, say who does each one and what they fill in. <a class="btn small primary" href="#/admin/flows">Build a process</a> <a class="btn small" href="#/admin/ai">Describe it to an AI instead</a></li></ol>
         ${FB.state.settings.canTryExample ? '<p class="small muted">Rather look around first? Use <b>Try the example</b> on the sign-in screen: a company with working processes.</p>' : ''}</section>` : ''}
       <section><h2>Your tasks <span class="count">${h.tasks.length}</span></h2>
       ${h.tasks.length ? `<div class="task-list">${h.tasks.map(t => `<a class="card task-row ${t.overdue ? 'overdue' : ''}" href="#/task/${t.id}">

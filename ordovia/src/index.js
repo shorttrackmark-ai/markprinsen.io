@@ -9,6 +9,7 @@ import {
   STATUSES, cleanStatus, reviewDueAt, likePattern,
 } from './lib.js';
 import { advance, startNode, mergeFormData } from './engine.js';
+import { extractJSON, planBundle, resolve, FIELD_TYPES } from './bundle.js';
 import { seedDemo, resetDemo, DEMO_ADMIN, DEMO_PASSWORD } from './seed.js';
 
 const SESSION_DAYS = 14;
@@ -1509,3 +1510,67 @@ route('GET', '/api/link-search', async (c) => {
   }
   return { results: results.slice(0, 40) };
 });
+
+// ---------------------------------------------------------------- "describe with AI": an AI answer (pasted by the user) becomes draft forms and processes
+// No AI service is called from here. The app writes the prompt, the user takes it to whatever AI they use and pastes the answer back;
+// it is parsed and checked like any other input (src/bundle.js) and everything is created as a draft.
+async function aiContext(c) {
+  const D = await c.dir();
+  return { areas: await all(c.db, 'SELECT id, name FROM areas ORDER BY name'), tags: [...D.tags.values()], personFields: await personFields(c), forms: await c.forms(),
+    people: [...D.persons.values()].filter(p => p.active).map(p => ({ id: p.id, name: p.name })), flows: await all(c.db, 'SELECT name FROM flows') };
+}
+route('GET', '/api/admin/ai/context', async (c) => {
+  const x = await aiContext(c);
+  return { areas: x.areas.map(a => a.name), tags: x.tags.map(t => t.category + ': ' + t.value), personFields: x.personFields.map(f => ({ label: f.label, type: f.type, options: f.options || [] })),
+    forms: x.forms.filter(f => f.status !== 'archived').map(f => ({ name: f.name, isClass: !!f.is_class, fields: f.fields.filter(fd => fd.type !== 'heading').map(fd => ({ key: fd.key, label: fd.label, type: fd.type })) })),
+    functions: FB.expr.functions, fieldTypes: FIELD_TYPES };
+}, { admin: true });
+async function checkBundle(c, text) {
+  let obj;
+  try { obj = extractJSON(text); } catch (e) { return { errors: [e.message], warnings: [], plan: null }; }
+  return planBundle(obj, await aiContext(c));
+}
+route('POST', '/api/admin/ai/preview', async (c) => {
+  const D = await c.dir();
+  const { errors, warnings, plan } = await checkBundle(c, (await c.body()).text);
+  if (!plan) return { ok: false, errors, warnings };
+  return { ok: true, errors: [], warnings, summary: {
+    area: plan.area ? { name: plan.area.name, isNew: !plan.area.id } : null, tags: plan.tags, usedForms: plan.usedForms,
+    forms: plan.forms.map(f => ({ name: f.name, fields: f.fields.length, isClass: f.is_class })),
+    flows: plan.flows.map(fl => ({ name: fl.name, description: fl.description, steps: fl.graph.nodes.filter(n => n.type !== 'start').map(n => ({ name: n.name, type: n.type === 'action' ? 'calc' : n.type, who: n.assignee ? (n.assignee.type === 'tags' ? n.assignee._tags.join(' + ') + ((n.assignee.sameAs || []).length ? ' (same ' + n.assignee.sameAs.join(', ') + ' as initiator)' : '') : D.describe(n.assignee)) : '', form: n._form || '' })) })) } };
+}, { admin: true });
+route('POST', '/api/admin/ai/apply', async (c) => {
+  const D = await c.dir();
+  const { errors, plan } = await checkBundle(c, (await c.body()).text);
+  if (!plan) throw new HttpError(422, errors[0] || 'The answer cannot be used', { errors });
+  // area
+  let areaId = null;
+  if (plan.area) areaId = plan.area.id || await run(c.db, 'INSERT INTO areas(name, description, color, created_at) VALUES (?,?,?,?)', plan.area.name, '', '#3d5a80', now());
+  // tags
+  const tagIds = new Map([...D.tags.values()].map(t => [(t.category + ': ' + t.value).toLowerCase(), t.id]));
+  for (const t of plan.tags) tagIds.set((t.category + ': ' + t.value).toLowerCase(), await run(c.db, 'INSERT INTO tags(category, value) VALUES (?,?)', t.category, t.value));
+  // forms: first the empty shells (so forms can link to each other), then their fields
+  const all_ = await c.forms();
+  const formIds = new Map(all_.filter(f => f.status !== 'archived').map(f => [f.name.toLowerCase(), f.id]));
+  const made = [];
+  for (const f of plan.forms) {
+    let slug = f.slug, n = 2;
+    while (await first(c.db, 'SELECT 1 FROM forms WHERE slug = ?', slug)) slug = f.slug + '_' + n++;
+    const fid = await run(c.db, 'INSERT INTO forms(name, slug, description, fields, access, area_id, status, owner_id, is_class, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', f.name, slug, f.description, '[]', f.is_class ? '{}' : '{"direct":false}', areaId, 'draft', c.user.id, f.is_class ? 1 : 0, now());
+    formIds.set(f.name.toLowerCase(), fid); made.push({ id: fid, name: f.name, slug });
+  }
+  const res = resolve(plan, formIds, tagIds);
+  for (let i = 0; i < res.forms.length; i++) {
+    await c.db.batch([c.db.prepare('UPDATE forms SET fields = ? WHERE id = ?').bind(JSON.stringify(res.forms[i].fields), made[i].id), ...formViewSQL({ id: made[i].id, slug: made[i].slug, fields: res.forms[i].fields }).map(s => c.db.prepare(s))]);
+  }
+  c._forms = null;
+  const flows = [];
+  for (const fl of res.flows) {
+    const graph = JSON.stringify(fl.graph);
+    const fid = await run(c.db, 'INSERT INTO flows(name, description, graph, doc, version, area_id, status, owner_id, review_months, updated_at) VALUES (?,?,?,?,1,?,?,?,12,?)', fl.name, fl.description, graph, JSON.stringify(fl.doc), areaId, 'draft', c.user.id, now());
+    await snapshotFlow(c, { id: fid, name: fl.name, graph, doc: JSON.stringify(fl.doc), version: 1 });
+    flows.push({ id: fid, name: fl.name });
+  }
+  c.note('Created from an AI answer', [flows.map(f => 'process ' + f.name), made.map(f => 'form ' + f.name)].flat().join(', '));
+  return { flows, forms: made.map(f => ({ id: f.id, name: f.name })) };
+}, { admin: true });

@@ -639,3 +639,9 @@ table.register td a:hover { text-decoration: underline; }
   :root:not([data-theme="light"]) .btn.primary:hover { filter: brightness(1.1); }
 }
 :root[data-theme="dark"] .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+
+/* describe with AI */
+.ai-step { margin-bottom: 14px; max-width: 900px; }
+.ai-step textarea { font-size: 13px; }
+.ai-outline { margin: 4px 0 12px; padding-left: 22px; display: grid; gap: 4px; }
+#aiResult h4 { margin: 14px 0 6px; }

@@ -248,6 +248,43 @@ console.log('links');
   r = await del('/api/records/' + tmp); r = await get('/api/links?type=document&id=' + photoDoc.id); ok(!r.data.in.some(x => x.type === 'object' && x.id === tmp), 'a deleted object takes its links with it');
 }
 
+console.log('describe with AI');
+{
+  const adminCookie = cookie;
+  r = await get('/api/admin/ai/context'); ok(r.data.fieldTypes.includes('calc') && r.data.functions.includes('WORKDAYS') && r.data.forms.some(f => f.isClass) && r.data.tags.includes('Function: Manager'), 'the app knows what to tell an AI about the workspace');
+  r = await post('/api/admin/ai/preview', { text: 'I could not do that, sorry.' }); ok(r.data.ok === false && r.data.errors.length === 1, 'an answer without JSON is refused with a plain message', r.data);
+  const bundle = {
+    area: 'People & HR',
+    forms: [{ name: 'Time off', fields: [
+      { key: 'start_date', label: 'First day', type: 'date', required: true, width: 'half' },
+      { key: 'end_date', label: 'Last day', type: 'date', required: true, width: 'half' },
+      { key: 'days', label: 'Working days', type: 'calc', formula: 'WORKDAYS(start_date, end_date)' }] }],
+    processes: [{ name: 'Time off via AI', description: 'Ask for days off', purpose: 'Register leave', request_form: 'Time off', who_can_start: ['Function: Lead'], title: '"Time off " & initiator.name',
+      steps: [
+        { id: 'c', type: 'decision', name: 'More than 3 days?', branches: [{ label: 'Yes', when: 'days > 3', to: 'm' }, { label: 'No', to: 'ok' }] },
+        { id: 'm', type: 'task', name: 'Manager approval', form: 'Approval', who: { type: 'tags', tags: ['Function: Manager'], same_as_initiator: ['Department'] }, due_hours: 48, next: 'v' },
+        { id: 'v', type: 'decision', name: 'Approved?', branches: [{ label: 'Yes', when: 'decision == "Approve"', to: 'ok' }, { label: 'No', to: 'no' }] },
+        { id: 'ok', type: 'end', name: 'Approved' }, { id: 'no', type: 'end', name: 'Rejected' }] }],
+  };
+  const FENCE = String.fromCharCode(96).repeat(3);
+  const text = 'Sure, here is the process:\n' + FENCE + 'json\n' + JSON.stringify(bundle) + '\n' + FENCE + '\nLet me know if you want changes.';
+  r = await post('/api/admin/ai/preview', { text }); ok(r.data.ok && r.data.summary.flows[0].steps.length === 5 && r.data.summary.forms[0].name === 'Time off' && r.data.summary.tags.some(t => t.value === 'Lead') && r.data.summary.usedForms.includes('Approval'), 'a good answer is checked and summarised (new tag, existing form reused)', r.data);
+  const before = (await get('/api/admin/flows')).data.length;
+  r = await post('/api/admin/ai/apply', { text }); ok(r.status === 200 && r.data.flows.length === 1, 'apply creates the process', r.data); const aiFlow = r.data.flows[0].id;
+  ok((await get('/api/admin/flows')).data.length === before + 1, 'one new process');
+  r = await get('/api/admin/flows/' + aiFlow); ok(r.data.status === 'draft' && r.data.issues.length === 0 && r.data.graph.nodes.length === 6, 'it starts as a draft without issues', r.data.issues);
+  r = await get('/api/meta'); const tf = r.data.forms.find(x => x.name === 'Time off'); ok(tf && tf.status === 'draft' && tf.fields.length === 3, 'the new form is a draft too'); ok(r.data.tags.some(t => t.category === 'Function' && t.value === 'Lead'), 'the missing tag was created');
+  r = await post('/api/admin/ai/apply', { text: 'no json' }); ok(r.status === 422, 'apply refuses what preview refuses');
+  r = await put('/api/admin/forms/' + tf.id, { name: tf.name, description: '', fields: tf.fields, checks: [], access: { direct: false }, status: 'active' }); ok(r.status === 200, 'activate the form');
+  { const fl = (await get('/api/admin/flows/' + aiFlow)).data; r = await put('/api/admin/flows/' + aiFlow, { name: fl.name, description: fl.description, graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 200 && r.data.status === 'active', 'activate the process', r.data); }
+  r = await post('/api/flows/' + aiFlow + '/start', { data: { start_date: '2026-12-07', end_date: '2026-12-15' } }); ok(r.status === 200 && r.data.instanceId, 'start it with a 7-day request', r.data); const aiRun = r.data.instanceId;
+  cookie = ''; r = await post('/api/login', { email: 'daan@example.com', password: 'demo1234' });
+  const mt = (await get('/api/home')).data.tasks.find(x => x.name === 'Manager approval' && x.instance_id === aiRun); ok(mt, 'the operations manager gets the approval (manager + same department)');
+  r = await post('/api/tasks/' + mt.id + '/complete', { data: { decision: 'Approve' } }); ok(r.status === 200, 'the manager approves');
+  r = await get('/api/instances/' + aiRun); ok(r.data.instance.status === 'done' && r.data.instance.outcome === 'Approved', 'the case ends as Approved: the AI-built process really runs', r.data.instance);
+  cookie = adminCookie;
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');
