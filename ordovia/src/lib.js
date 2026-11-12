@@ -66,7 +66,7 @@ export function readCookie(req, name) {
 // ---------- directory: people, tags and assignment rules ----------
 export async function loadDirectory(db) {
   const [p, t, pt] = await db.batch([
-    db.prepare('SELECT id, name, email, is_admin, active, attrs FROM persons ORDER BY name'),
+    db.prepare('SELECT id, name, email, is_admin, active, attrs, deputy_id, away_until FROM persons ORDER BY name'),
     db.prepare('SELECT * FROM tags ORDER BY category, value'),
     db.prepare('SELECT person_id, tag_id FROM person_tags'),
   ]);
@@ -95,7 +95,7 @@ export function makeDirectory(personRows, tagRows, ptRows) {
     },
     hasTags: (pid, tagIds) => (tagIds || []).every(id => D.tagIdsOf(pid).has(Number(id))),
     /** Does a person match an assignee rule for this process instance? */
-    matches(pid, rule, inst) {
+    matchOne(pid, rule, inst) {
       rule = rule || {};
       const vars = inst ? (typeof inst.vars === 'string' ? parse(inst.vars, {}) : inst.vars || {}) : {};
       switch (rule.type) {
@@ -132,6 +132,12 @@ export function makeDirectory(personRows, tagRows, ptRows) {
         default: return 'Anyone';
       }
     },
+    /** Who is away right now and has this person as deputy: their tasks are also this person's. */
+    covering(pid) {
+      const today = new Date().toISOString().slice(0, 10);
+      return [...persons.values()].filter(q => q.deputy_id === pid && q.active && q.away_until && q.away_until >= today).map(q => q.id);
+    },
+    matches(pid, rule, inst) { return D.matchOne(pid, rule, inst) || D.covering(pid).some(q => D.matchOne(q, rule, inst)); },
     personOptions(tagIds) {
       return [...persons.values()].filter(p => p.active && D.hasTags(p.id, tagIds)).map(p => ({ id: p.id, name: p.name }));
     },

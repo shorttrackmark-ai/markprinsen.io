@@ -97,17 +97,10 @@ export default {
     const db = env.DB;
     if (env.DB_DEMO && new Date(event.scheduledTime).getUTCHours() === 3) exec.waitUntil(resetDemo(env.DB_DEMO, env.FILES_DEMO));   // (the example starts fresh every night)
     await cleanLooseFiles(db, env.FILES);
-    const due = await all(db, `SELECT t.id, t.name, t.instance_id, i.title FROM tasks t JOIN instances i ON i.id = t.instance_id
-      WHERE t.status = 'open' AND t.due_at IS NOT NULL AND t.due_at < ? AND t.reminded_at IS NULL LIMIT 40`, now());
+    const due = await overdueCheck(db);
     if (!due.length) return;
-    const tx = new Tx(db);
-    for (const t of due) {
-      tx.add('UPDATE tasks SET reminded_at = ? WHERE id = ?', now(), t.id);
-      tx.add('INSERT INTO events(instance_id, message, created_at) VALUES (?,?,?)', t.instance_id, `Task “${t.name}” is overdue`, now());
-    }
-    await tx.commit();
     const hook = await first(db, "SELECT value FROM settings WHERE key = 'notify_webhook'"), fmt = await first(db, "SELECT value FROM settings WHERE key = 'notify_format'");
-    if (hook && hook.value) exec.waitUntil(Promise.all(due.map(t => postJSON(hook.value, notifyBody(fmt && fmt.value, { event: 'task.overdue', text: `Overdue: ${t.name} – ${t.title}`, task: t })))));
+    if (hook && hook.value) exec.waitUntil(Promise.all(due.map(t => postJSON(hook.value, notifyBody(fmt && fmt.value, { event: 'task.overdue', text: `Overdue: ${t.name} – ${t.title}${t.owner_name ? ' (handed to ' + t.owner_name + ')' : ''}`, task: { id: t.id, name: t.name, title: t.title } })))));
   },
 };
 
@@ -132,14 +125,14 @@ async function authenticate(c) {
     const raw = auth.replace(/^bearer\s+/i, '').trim();
     const t = await first(c.db, 'SELECT t.id, t.person_id FROM api_tokens t JOIN persons p ON p.id = t.person_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND p.active = 1', await sha256(raw));
     if (!t) throw new HttpError(401, 'Invalid or revoked API token');
-    c.user = await first(c.db, 'SELECT id, name, email, is_admin FROM persons WHERE id = ?', t.person_id);
+    c.user = await first(c.db, 'SELECT id, name, email, is_admin, deputy_id, away_until FROM persons WHERE id = ?', t.person_id);
     c.viaToken = t.id;
     c.exec.waitUntil(run(c.db, 'UPDATE api_tokens SET last_used_at = ? WHERE id = ?', now(), t.id));
     return;
   }
   const token = readCookie(c.req, c.cookieName);
   if (!token) return;
-  const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin FROM sessions s JOIN persons p ON p.id = s.person_id
+  const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin, p.deputy_id, p.away_until FROM sessions s JOIN persons p ON p.id = s.person_id
     WHERE s.token_hash = ? AND s.expires_at > ? AND p.active = 1`, await sha256(token), now());
   if (s) c.user = s;
 }
@@ -200,7 +193,7 @@ route('GET', '/api/meta', async (c) => {
     user: c.user,
     tags: [...D.tags.values()],
     categories: D.categories(),
-    people: [...D.persons.values()].filter(p => p.active).map(p => ({ id: p.id, name: p.name, tagIds: [...D.tagIdsOf(p.id)] })),
+    people: [...D.persons.values()].filter(p => p.active).map(p => ({ id: p.id, name: p.name, tagIds: [...D.tagIdsOf(p.id)], away_until: p.away_until || null, deputy_id: p.deputy_id || null })),
     areas: await all(c.db, 'SELECT id, name, description, color, owner_id FROM areas ORDER BY name'),
     documents: await all(c.db, "SELECT id, name, kind, area_id, status FROM documents WHERE status != 'archived' ORDER BY name"),
     personFields: await personFields(c),
@@ -211,9 +204,10 @@ route('GET', '/api/meta', async (c) => {
 
 async function openTasksFor(c, pid) {
   const D = await c.dir();
-  const rows = await all(c.db, `SELECT t.id, t.name, t.assignee, t.created_at, t.due_at, t.instance_id, i.title AS process, i.vars, i.started_by, f.name AS flow
+  const rows = await all(c.db, `SELECT t.id, t.name, t.assignee, t.created_at, t.due_at, t.escalated_at, t.instance_id, i.title AS process, i.vars, i.started_by, f.name AS flow, f.owner_id AS flow_owner
     FROM tasks t JOIN instances i ON i.id = t.instance_id JOIN flows f ON f.id = i.flow_id WHERE t.status = 'open' ORDER BY t.created_at`);
-  return rows.filter(t => D.matches(pid, parse(t.assignee, {}), t)).map(t => ({
+  return rows.filter(t => D.matches(pid, parse(t.assignee, {}), t) || (t.escalated_at && t.flow_owner === pid)).map(t => ({
+    escalated: !!t.escalated_at && t.flow_owner === pid && !D.matches(pid, parse(t.assignee, {}), t),
     id: t.id, name: t.name, process: t.process, flow: t.flow, instance_id: t.instance_id, created_at: t.created_at, due_at: t.due_at,
     overdue: !!(t.due_at && t.due_at < now()), assignee: D.describe(parse(t.assignee, {})),
   }));
@@ -222,6 +216,7 @@ async function openTasksFor(c, pid) {
 /** May this user look at this process? */
 async function canSeeInstance(c, inst) {
   if (c.user.is_admin || inst.started_by === c.user.id) return true;
+  if (await first(c.db, 'SELECT 1 FROM instances i JOIN flows f ON f.id = i.flow_id WHERE i.id = ? AND f.owner_id = ?', inst.id, c.user.id)) return true;
   const D = await c.dir();
   const tasks = await all(c.db, 'SELECT assignee, status, completed_by FROM tasks WHERE instance_id = ?', inst.id);
   return tasks.some(t => t.completed_by === c.user.id || (t.status === 'open' && D.matches(c.user.id, parse(t.assignee, {}), inst)));
@@ -378,8 +373,8 @@ function afterwards(graph, nodeId, D) {
   return '';
 }
 route('GET', '/api/tasks/:id', async (c, { id }) => {
-  const t = await first(c.db, `SELECT t.*, i.vars, i.title AS process, i.started_by, i.graph, i.id AS iid, i.flow_id, i.status AS istatus, i.created_at AS started_at, sp.name AS starter
-    FROM tasks t JOIN instances i ON i.id = t.instance_id LEFT JOIN persons sp ON sp.id = i.started_by WHERE t.id = ?`, Number(id));
+  const t = await first(c.db, `SELECT t.*, i.vars, i.title AS process, i.started_by, i.graph, i.id AS iid, i.flow_id, i.status AS istatus, i.created_at AS started_at, sp.name AS starter, fo.owner_id AS flow_owner
+    FROM tasks t JOIN instances i ON i.id = t.instance_id LEFT JOIN persons sp ON sp.id = i.started_by LEFT JOIN flows fo ON fo.id = i.flow_id WHERE t.id = ?`, Number(id));
   if (!t) throw new HttpError(404, 'Task not found');
   const inst = { id: t.iid, started_by: t.started_by, vars: t.vars };
   if (!(await canSeeInstance(c, inst))) throw new HttpError(403, 'Not your task');
@@ -396,7 +391,8 @@ route('GET', '/api/tasks/:id', async (c, { id }) => {
     documents: await docsByIds(c, node.docIds, node.docSections || {}),
     links: (await linksOf(c, { type: 'flow', id: t.flow_id, sub: t.node_id }, parse(t.vars, {}))).out.filter(x => !x.derived),
     assignee: D.describe(parse(t.assignee, {})),
-    canComplete: t.status === 'open' && D.matches(c.user.id, parse(t.assignee, {}), inst),
+    canComplete: t.status === 'open' && (D.matches(c.user.id, parse(t.assignee, {}), inst) || (!!t.escalated_at && t.flow_owner === c.user.id)),
+    escalated: !!t.escalated_at, canReassign: t.status === 'open' && !!(c.user.is_admin || t.flow_owner === c.user.id),
     vars: parse(t.vars, {}),
     previous: previous.filter(s => s !== own).map(s => ({ ...s, data: parse(s.data, {}) })),
     submission: own ? { ...own, data: parse(own.data, {}) } : null,
@@ -405,12 +401,12 @@ route('GET', '/api/tasks/:id', async (c, { id }) => {
 
 route('POST', '/api/tasks/:id/complete', async (c, { id }) => {
   const b = await c.body();
-  const t = await first(c.db, 'SELECT t.*, i.vars, i.title, i.started_by, i.graph, i.status AS istatus, i.external_ref, i.callback_url, f.name AS flow_name FROM tasks t JOIN instances i ON i.id = t.instance_id JOIN flows f ON f.id = i.flow_id WHERE t.id = ?', Number(id));
+  const t = await first(c.db, 'SELECT t.*, i.vars, i.title, i.started_by, i.graph, i.status AS istatus, i.external_ref, i.callback_url, f.name AS flow_name, f.owner_id AS flow_owner FROM tasks t JOIN instances i ON i.id = t.instance_id JOIN flows f ON f.id = i.flow_id WHERE t.id = ?', Number(id));
   if (!t) throw new HttpError(404, 'Task not found');
   if (t.status !== 'open') throw new HttpError(409, 'This task is no longer open');
   const D = await c.dir();
   const inst = { id: t.instance_id, started_by: t.started_by, vars: t.vars };
-  if (!D.matches(c.user.id, parse(t.assignee, {}), inst)) throw new HttpError(403, 'This task is assigned to someone else');
+  if (!D.matches(c.user.id, parse(t.assignee, {}), inst) && !(t.escalated_at && t.flow_owner === c.user.id)) throw new HttpError(403, 'This task is assigned to someone else');
   const proc = { id: t.instance_id, flowName: t.flow_name, graph: parse(t.graph, { nodes: [], edges: [] }), vars: parse(t.vars, {}), title: t.title, status: t.istatus, started_by: t.started_by, finished_at: null, ref: t.external_ref, callback: t.callback_url };
   const tx = new Tx(c.db);
   // Guard against double completion inside the same atomic batch.
@@ -762,6 +758,7 @@ async function savePerson(c, pid, b) {
     if (!res.ok) throw new HttpError(422, 'Please check the attributes', { errors: res.errors, formErrors: res.formErrors });
     attrs = JSON.stringify(Object.fromEntries(pf.filter(f => res.data[f.key] != null && res.data[f.key] !== '').map(f => [f.key, res.data[f.key]])));
   }
+  const away = b.away_until !== undefined || b.deputy_id !== undefined ? await cleanAway(c, pid || 0, b) : null;
   const hash = b.password ? await hashPassword(String(b.password)) : null;
   let id = pid;
   if (!pid) id = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at) VALUES (?,?,?,?,?,?)', name, email, hash, b.is_admin ? 1 : 0, b.active === false ? 0 : 1, now());
@@ -771,6 +768,7 @@ async function savePerson(c, pid, b) {
     if (hash || !b.active) st.push(c.db.prepare('DELETE FROM sessions WHERE person_id = ? AND ? = 0').bind(pid, pid === c.user.id ? 1 : 0));
   }
   if (attrs !== null) st.push(c.db.prepare('UPDATE persons SET attrs = ? WHERE id = ?').bind(attrs, id));
+  if (away) st.push(c.db.prepare('UPDATE persons SET away_until = ?, deputy_id = ? WHERE id = ?').bind(away.until, away.dep, id));
   st.push(c.db.prepare('DELETE FROM person_tags WHERE person_id = ?').bind(id));
   for (const tid of (b.tagIds || []).map(Number).filter(Number.isInteger)) st.push(c.db.prepare('INSERT OR IGNORE INTO person_tags(person_id, tag_id) VALUES (?,?)').bind(id, tid));
   await c.db.batch(st);
@@ -1626,3 +1624,50 @@ route('POST', '/api/admin/templates/:id/apply', async (c, { id }) => {
   return applyPlan(c, plan, 'template ' + t.name);
 }, { admin: true });
 
+
+// ---------------------------------------------------------------- keeping the process moving: absence cover, escalation, reassigning
+/** Tasks past their due date are flagged once and also handed to the process owner (who can complete or reassign them). Run hourly. */
+async function overdueCheck(db) {
+  const due = await all(db, `SELECT t.id, t.name, t.instance_id, i.title, f.owner_id, p.name AS owner_name FROM tasks t JOIN instances i ON i.id = t.instance_id JOIN flows f ON f.id = i.flow_id
+    LEFT JOIN persons p ON p.id = f.owner_id WHERE t.status = 'open' AND t.due_at IS NOT NULL AND t.due_at < ? AND t.reminded_at IS NULL LIMIT 40`, now());
+  if (!due.length) return [];
+  const tx = new Tx(db);
+  for (const t of due) {
+    tx.add('UPDATE tasks SET reminded_at = ?, escalated_at = ? WHERE id = ?', now(), t.owner_id ? now() : null, t.id);
+    tx.add('INSERT INTO events(instance_id, message, created_at) VALUES (?,?,?)', t.instance_id, `Task “${t.name}” is overdue` + (t.owner_name ? ` – also handed to ${t.owner_name}, the process owner` : ''), now());
+  }
+  await tx.commit();
+  return due;
+}
+route('POST', '/api/admin/overdue-check', async (c) => ({ escalated: (await overdueCheck(c.db)).length }), { admin: true });
+
+/** "I am away until …, my deputy covers my tasks." Returns the two values to store, checked. */
+async function cleanAway(c, selfId, b) {
+  const until = b.away_until ? String(b.away_until).slice(0, 10) : null;
+  if (until && !/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new HttpError(400, 'Use a date for “away until”.');
+  if (until && until < now().slice(0, 10)) throw new HttpError(400, '“Away until” cannot be in the past.');
+  const dep = until && b.deputy_id ? Number(b.deputy_id) : null;
+  if (until && !dep) throw new HttpError(400, 'Choose a deputy who covers your tasks while you are away.');
+  if (dep) { const p = await first(c.db, 'SELECT id FROM persons WHERE id = ? AND active = 1', dep); if (!p || dep === selfId) throw new HttpError(400, 'Choose another active person as deputy.'); }
+  return { until, dep };
+}
+route('PUT', '/api/me/away', async (c) => {
+  const { until, dep } = await cleanAway(c, c.user.id, await c.body());
+  await run(c.db, 'UPDATE persons SET away_until = ?, deputy_id = ? WHERE id = ?', until, dep, c.user.id);
+  await logAudit(c, until ? 'away' : 'back', 'person', c.user.id, c.user.name, until ? 'until ' + until + ', deputy id ' + dep : '');
+  return { ok: true };
+});
+route('POST', '/api/tasks/:id/reassign', async (c, { id }) => {
+  const b = await c.body();
+  const t = await first(c.db, 'SELECT t.id, t.name, t.status, t.assignee, t.instance_id, f.owner_id FROM tasks t JOIN instances i ON i.id = t.instance_id JOIN flows f ON f.id = i.flow_id WHERE t.id = ?', Number(id));
+  if (!t) throw new HttpError(404, 'Task not found');
+  if (t.status !== 'open') throw new HttpError(409, 'This task is no longer open');
+  if (!c.user.is_admin && t.owner_id !== c.user.id) throw new HttpError(403, 'Only the process owner or an administrator can reassign a task');
+  const D = await c.dir(), p = D.persons.get(Number(b.personId));
+  if (!p || !p.active) throw new HttpError(400, 'Choose an active person.');
+  await c.db.batch([
+    c.db.prepare('UPDATE tasks SET assignee = ? WHERE id = ?').bind(JSON.stringify({ type: 'person', personId: p.id }), t.id),
+    c.db.prepare('INSERT INTO events(instance_id, person_id, message, created_at) VALUES (?,?,?,?)').bind(t.instance_id, c.user.id, `Task “${t.name}” reassigned from ${D.describe(parse(t.assignee, {}))} to ${p.name} by ${c.user.name}`, now()),
+  ]);
+  return { ok: true };
+});

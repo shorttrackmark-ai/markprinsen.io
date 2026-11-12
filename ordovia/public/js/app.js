@@ -118,13 +118,27 @@
   };
   FB.dueText = dueText;
 
+  /** "I'm away until…, my deputy covers my tasks." Tasks that would go to me also go to the deputy until that date. */
+  FB.awayModal = () => {
+    const u = FB.state.user, others = FB.state.meta.people.filter(p => p.id !== u.id);
+    const away = !!(u.away_until && u.away_until >= new Date().toISOString().slice(0, 10));
+    const m = modal("I'm away", `<form id="awf"><p class="muted small">While you are away, your deputy receives the tasks that would go to you, including the ones already waiting.</p>
+      <label>Away until<input type="date" name="until" value="${esc(away ? u.away_until : '')}"></label>
+      <label>Deputy<select name="dep"><option value="">– choose –</option>${others.map(p => `<option value="${p.id}" ${p.id === u.deputy_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+      <div class="form-actions">${away ? '<button type="button" class="btn ghost" id="awBack">I\'m back</button>' : ''}<button class="btn primary">Save</button></div></form>`);
+    const save = async (body) => { try { await api.put('/me/away', body); const s = await api.get('/session'); FB.state.user = s.user; await FB.loadMeta(); m.close(); toast(body.away_until ? 'Saved' : 'Welcome back', 'ok'); FB.render(); } catch (err) { toast(err.message, 'error'); } };
+    $('#awf', m.root).onsubmit = (e) => { e.preventDefault(); save({ away_until: e.target.until.value || null, deputy_id: e.target.dep.value ? Number(e.target.dep.value) : null }); };
+    const back = $('#awBack', m.root); if (back) back.onclick = () => save({ away_until: null, deputy_id: null });
+  };
+
   // ---------------- my tasks ----------------
   FB.route('/', async (main) => {
     const u = FB.state.user;
     const h = await api.get('/home');
+    const today = new Date().toISOString().slice(0, 10), away = !!(u.away_until && u.away_until >= today), deputy = away ? ((FB.state.meta.people.find(p => p.id === u.deputy_id) || {}).name || 'your deputy') : '';
     const late = h.tasks.filter(t => t.overdue).length;
     main.innerHTML = `<div class="page"><div class="page-head"><div><h1>Hi ${esc(u.name.split(' ')[0])}</h1>
-      <p class="muted">${h.tasks.length ? `You have <b>${h.tasks.length}</b> task${h.tasks.length === 1 ? '' : 's'} waiting${late ? `, <span class="danger-text">${late} overdue</span>` : ''}.` : 'Nothing is waiting for you.'}</p></div></div>
+      <p class="muted">${h.tasks.length ? `You have <b>${h.tasks.length}</b> task${h.tasks.length === 1 ? '' : 's'} waiting${late ? `, <span class="danger-text">${late} overdue</span>` : ''}.` : 'Nothing is waiting for you.'}</p>${away ? `<p class="small away-note">You are marked as away until <b>${esc(u.away_until)}</b>. ${esc(deputy)} covers your tasks.</p>` : ''}</div><div class="actions"><button class="btn small" id="awayBtn">${away ? 'Change absence' : 'I\'m away…'}</button></div></div>
       ${FB.isAdmin() && !h.flows.length ? `<section class="card getting-started"><h2>Let's set up your first process</h2>
         <ol class="gs-steps"><li><b>Departments.</b> Group everything by who it belongs to. <button class="btn small" id="gsAreas">Add typical departments</button> <a class="btn small ghost" href="#/admin/areas">Or create your own</a></li>
         <li><b>People.</b> Add your colleagues and give them tags (department, function) so tasks reach the right person. <a class="btn small" href="#/admin/people">Add people</a></li>
@@ -132,7 +146,7 @@
         ${FB.state.settings.canTryExample ? '<p class="small muted">Rather look around first? Use <b>Try the example</b> on the sign-in screen: a company with working processes.</p>' : ''}</section>` : ''}
       <section><h2>Your tasks <span class="count">${h.tasks.length}</span></h2>
       ${h.tasks.length ? `<div class="task-list">${h.tasks.map(t => `<a class="card task-row ${t.overdue ? 'overdue' : ''}" href="#/task/${t.id}">
-        <div><b>${esc(t.name)}</b><div class="muted small">${esc(t.process)}</div></div>
+        <div><b>${esc(t.name)}</b>${t.escalated ? ' <span class="status s-stuck">overdue – handed to you</span>' : ''}<div class="muted small">${esc(t.process)}</div></div>
         <div class="right small">${t.due_at ? `<span class="${t.overdue ? 'danger-text' : 'muted'}">${esc(dueText(t.due_at))}</span>` : `<span class="muted">${esc(fmtDate(t.created_at))}</span>`}</div></a>`).join('')}</div>`
         : '<div class="empty-state card"><p>All done. New tasks show up here the moment a process needs you.</p></div>'}</section>
       <section><h2>Start a process</h2>${h.flows.length > 6 ? '<div class="filters"><input type="search" id="stQ" placeholder="Find a process…"></div>' : ''}<div id="stList"></div></section>
@@ -143,6 +157,7 @@
       $$('[data-start]', main).forEach(b => b.onclick = () => FB.org.start(h.flows.find(f => f.id === Number(b.dataset.start)), b));
     };
     drawStart('');
+    $('#awayBtn', main).onclick = () => FB.awayModal();
     const stq = $('#stQ', main); if (stq) stq.oninput = () => drawStart(stq.value);
     const gsA = $('#gsAreas', main); if (gsA) gsA.onclick = async () => { try { await api.post('/admin/areas/starter'); await FB.loadMeta(); toast('Departments added', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); } };
     clickableRows(main);
@@ -155,12 +170,18 @@
     const d = await api.get('/tasks/' + Number(id));
     const t = d.task, form = t.form_id ? formById(t.form_id) : null;
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/processes/${t.instance_id}">← ${esc(t.process)}</a><h1>${esc(t.name)}</h1>
-      <p class="muted small">${t.status === 'open' && t.due_at ? `<span class="${t.due_at < new Date().toISOString().slice(0, 19).replace('T', ' ') ? 'danger-text' : ''}">${esc(dueText(t.due_at))}</span> · ` : ''}for ${d.canComplete ? 'you' : esc(d.assignee)}</p></div><span class="status s-${esc(t.status)}">${esc(t.status)}</span></div>
+      <p class="muted small">${t.status === 'open' && t.due_at ? `<span class="${t.due_at < new Date().toISOString().slice(0, 19).replace('T', ' ') ? 'danger-text' : ''}">${esc(dueText(t.due_at))}</span> · ` : ''}for ${d.canComplete ? 'you' : esc(d.assignee)}</p></div><div class="actions">${d.canReassign ? '<button class="btn small" id="reassign">Reassign…</button>' : ''}<span class="status s-${esc(t.status)}">${esc(t.status)}</span></div></div>
+      ${d.escalated && t.status === 'open' ? '<div class="card instructions escalated"><b>This task is overdue.</b> It was also handed to the process owner, who can complete or reassign it.</div>' : ''}
       ${d.instructions ? `<div class="card instructions"><h4>Work instruction</h4><p>${richText(d.instructions)}</p></div>` : ''}
       ${(d.documents || []).length ? `<div class="card instructions"><h4>Documents for this step</h4>${FB.org.docLinks(d.documents)}</div>` : ''}
       ${(d.links || []).length ? `<div class="card instructions"><h4>Linked at this step</h4>${FB.org.linkList(d.links)}</div>` : ''}
       <div class="two-col"><div class="card" id="taskForm"></div>
       <aside>${d.previous.length ? `<h3>Earlier in this case</h3>${d.previous.map(s => { const f = formById(s.form_id); return f ? `<div class="card prev"><div class="muted small">${esc(s.task_name || f.name)} · ${esc(s.who || 'automatic')} · ${esc(fmtDate(s.created_at))}</div>${FB.forms.summary(f, s.data)}</div>` : ''; }).join('')}` : `<h3>This case</h3><div class="card prev"><div class="small">Started${d.case.starter ? ' by <b>' + esc(d.case.starter) + '</b>' : ''} on ${esc(fmtDate(d.case.started_at))}</div><div class="small"><a href="#/processes/${d.case.id}">Open the whole case</a></div></div>`}</aside></div></div>`;
+    const rb = $('#reassign', main);
+    if (rb) rb.onclick = () => {
+      const m = modal('Reassign “' + t.name + '”', `<form id="raf"><label>Give this task to<select name="p" required><option value="">– choose a person –</option>${FB.state.meta.people.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label><div class="form-actions"><button class="btn primary">Reassign</button></div></form>`);
+      $('#raf', m.root).onsubmit = async (e) => { e.preventDefault(); try { await api.post(`/tasks/${t.id}/reassign`, { personId: Number(e.target.p.value) }); m.close(); toast('Reassigned', 'ok'); FB.render(); } catch (err) { toast(err.message, 'error'); } };
+    };
     const box = $('#taskForm', main);
     if (t.status !== 'open') { box.innerHTML = `<p class="muted">Completed ${esc(fmtDate(t.completed_at))}.</p>${d.submission && form ? FB.forms.summary(form, d.submission.data) : ''}`; return; }
     if (!d.canComplete) { box.innerHTML = `<p>This task is assigned to: <b>${esc(d.assignee)}</b>.</p>`; return; }
@@ -428,6 +449,7 @@
         <label>Name<input name="name" required value="${esc(p.name)}"></label>
         <label>E-mail<input name="email" type="email" required value="${esc(p.email)}"></label>
         <label>Password ${pid ? '<small class="muted">(leave empty to keep)</small>' : '<small class="muted">(at least 8 characters)</small>'}<input name="password" type="password" minlength="8" autocomplete="new-password" ${pid ? '' : 'required'}></label>
+        <fieldset><legend>Absence</legend><div class="row2"><label>Away until<input type="date" name="away_until" value="${esc(p.away_until || '')}"></label><label>Deputy<select name="deputy_id"><option value="">–</option>${people.filter(x => x.id !== pid && x.active).map(x => `<option value="${x.id}" ${x.id === p.deputy_id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label></div></fieldset>
         ${pfields.length ? `<fieldset><legend>Attributes</legend><div class="row2">${pfields.map(f => `<label>${esc(f.label)}${attrInput(f, p.attrs[f.key])}</label>`).join('')}</div></fieldset>` : ''}
         ${cats.map(c => `<fieldset><legend>${esc(c)}</legend>${tags.filter(t => t.category === c).map(t => `<label class="check inline"><input type="checkbox" name="tag" value="${t.id}" ${p.tagIds.includes(t.id) ? 'checked' : ''}><span>${esc(t.value)}</span></label>`).join('')}</fieldset>`).join('')}
         <label class="check"><input type="checkbox" name="is_admin" ${p.is_admin ? 'checked' : ''}><span>Administrator (builds flows, forms, dashboards; uses SQL)</span></label>
@@ -436,7 +458,7 @@
       $('#pf', m.root).onsubmit = async (e) => {
         e.preventDefault();
         const f = e.target;
-        const body = { name: f.name.value, email: f.email.value, password: f.password.value || undefined, is_admin: f.is_admin.checked, active: f.active.checked, tagIds: $$('input[name="tag"]:checked', f).map(c => Number(c.value)),
+        const body = { name: f.name.value, email: f.email.value, password: f.password.value || undefined, is_admin: f.is_admin.checked, active: f.active.checked, tagIds: $$('input[name="tag"]:checked', f).map(c => Number(c.value)), away_until: f.away_until.value || null, deputy_id: f.deputy_id.value ? Number(f.deputy_id.value) : null,
           attrs: Object.fromEntries(pfields.map(af => { const i = f.elements['attr:' + af.key]; return [af.key, !i ? null : af.type === 'checkbox' ? i.checked : af.type === 'number' ? (i.value === '' ? null : Number(i.value)) : (i.value === '' ? null : i.value)]; })) };
         try { if (pid) await api.put('/admin/people/' + pid, body); else await api.post('/admin/people', body); m.close(); toast('Saved', 'ok'); done(); }
         catch (err) { toast(err.data && err.data.errors ? Object.values(err.data.errors)[0] : err.message, 'error'); }

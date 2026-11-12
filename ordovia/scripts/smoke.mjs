@@ -316,6 +316,41 @@ console.log('templates');
   for (const t of (await get('/api/admin/templates')).data.templates) { if (t.id === 'incident') continue; const x = await post('/api/admin/templates/' + t.id + '/apply', {}); ok(x.status === 200, 'template ' + t.id + ' can be added', x.data); }
 }
 
+console.log('cover for absence, escalation, reassigning');
+{
+  const adminCookie = cookie;
+  const login = async (email) => { cookie = ''; const x = await post('/api/login', { email, password: 'demo1234' }); return x.status === 200; };
+  const calib = (await get('/api/home')).data.flows.find(x => x.name === 'Machine calibration');
+  const machine = (await get('/api/objects')).data.find(o => o.name === 'Machine');
+  const mach = (await get('/api/objects/' + machine.id)).data.objects.find(o => o.data.machine_id === 'M-002');
+  r = await post('/api/flows/' + calib.id + '/start', { subject: mach.id }); const run1 = r.data.instanceId;
+  const tasksOf = async (email) => { await login(email); return (await get('/api/home')).data.tasks.filter(t => t.instance_id === run1); };
+  ok((await tasksOf('sanne@example.com')).length === 0, 'a salesperson does not see the calibration task');
+  // Carla (metrologist) is away; Sanne covers
+  await login('carla@example.com');
+  r = await put('/api/me/away', { away_until: '2000-01-01', deputy_id: 4 }); ok(r.status === 400, 'away until a date in the past is refused');
+  r = await put('/api/me/away', { away_until: '2999-01-01' }); ok(r.status === 400, 'an absence needs a deputy');
+  const dep = (await get('/api/meta')).data.people.find(p => p.name === 'Sanne Bakker');
+  r = await put('/api/me/away', { away_until: '2999-01-01', deputy_id: dep.id }); ok(r.status === 200, 'Carla marks herself as away with Sanne as deputy', r.data);
+  ok((await tasksOf('sanne@example.com')).length === 1, 'Sanne now receives the calibration task while Carla is away');
+  r = await post('/api/tasks/' + (await tasksOf('sanne@example.com'))[0].id + '/complete', { data: { measured_on: new Date().toISOString().slice(0, 10), result: 'Within tolerance', deviation: 0.1 } }); ok(r.status === 200, 'and can complete it');
+  await login('carla@example.com'); r = await put('/api/me/away', { away_until: null, deputy_id: null }); ok(r.status === 200, 'Carla is back');
+  // escalation: a task past its due date is handed to the process owner, who can reassign it
+  cookie = adminCookie;
+  r = await post('/api/flows/' + calib.id + '/start', { subject: mach.id }); const run2 = r.data.instanceId;
+  const tk = (await get('/api/instances/' + run2)).data.tasks[0];
+  r = await post('/api/admin/sql', { sql: "UPDATE tasks SET due_at = '2020-01-01 00:00:00' WHERE id = " + tk.id }); ok(r.status === 200, 'make the task overdue');
+  r = await post('/api/admin/overdue-check', {}); ok(r.status === 200 && r.data.escalated >= 1, 'the overdue check escalates it', r.data);
+  r = await get('/api/instances/' + run2); ok(r.data.events.some(e => /handed to Daan Visser, the process owner/.test(e.message)), 'the timeline says so');
+  await login('daan@example.com'); const dt = (await get('/api/home')).data.tasks.find(t => t.id === tk.id); ok(dt && dt.escalated, 'the process owner sees it, marked as handed to them', dt);
+  r = await get('/api/tasks/' + tk.id); ok(r.data.canComplete && r.data.canReassign && r.data.escalated, 'and may complete or reassign it');
+  r = await post('/api/tasks/' + tk.id + '/reassign', { personId: 999999 }); ok(r.status === 400, 'reassigning to nobody is refused');
+  r = await post('/api/tasks/' + tk.id + '/reassign', { personId: dep.id }); ok(r.status === 200, 'the owner reassigns it to Sanne');
+  await login('sanne@example.com'); ok(((await get('/api/home')).data.tasks).some(t => t.id === tk.id), 'Sanne now has the task');
+  await login('eva@example.com'); r = await post('/api/tasks/' + tk.id + '/reassign', { personId: dep.id }); ok(r.status === 403, 'a colleague cannot reassign');
+  cookie = adminCookie;
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');

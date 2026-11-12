@@ -70,3 +70,8 @@ New forms start as drafts. Forms, processes and documents cannot become active w
 
 ## Templates (built)
 Build › Templates: 11 ready-made processes in five packs (Health & safety: incident & corrective action, safety inspection, risk assessment, toolbox talk; People: leave, onboarding; Purchasing & finance: purchase request; Quality & equipment: machine calibration (with a Machine class), supplier approval; IT: access request). `src/templates.js`; each template is a bundle (the same format as "Describe with AI"), so it goes through the same checks and `applyPlan`: added as drafts in the chosen area, existing forms reused, missing tags created (Health reminds that nobody has them yet). test/templates.test.js verifies every template is valid, fully reachable and starts without getting stuck.
+
+## Keeping the process moving (built)
+- **Absence cover:** "I'm away…" on My tasks (and Absence in the people dialog): until a date, the chosen deputy receives the tasks that would go to the absent person (`D.covering`, migration 0008).
+- **Escalation:** the hourly job flags an overdue task once and also hands it to the process owner (`tasks.escalated_at`), who sees it marked "overdue – handed to you", may complete or reassign it; the timeline records it. Process owners can also open the cases of their processes.
+- **Reassign:** owner or administrator, to any active person, recorded in the timeline. `POST /api/admin/overdue-check` runs the same check on demand.

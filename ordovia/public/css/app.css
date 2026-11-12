@@ -649,3 +649,7 @@ table.register td a:hover { text-decoration: underline; }
 /* templates */
 .tpl-card { display: flex; flex-direction: column; }
 .tpl-card .row-actions { margin-top: auto; padding-top: 10px; }
+
+/* cover and escalation */
+.away-note { margin: 4px 0 0; padding: 4px 8px; background: var(--surface-2); border-left: 3px solid var(--warn); }
+.escalated { border-left-color: var(--danger); }
