@@ -253,6 +253,7 @@
           <label>Records &amp; retention<input data-doc="records" value="${esc(flow.doc.records || '')}"></label>
           <label>Who can start <small class="muted">(tags, empty = everyone)</small>${multiSelect('id="stTags"', FB.tagItems(), (g.nodes.find(n => n.type === 'start') || {}).startTags)}</label>
           <h4>Input</h4>
+          <label>Works on <small class="muted">(an object, such as a machine: whoever starts the process chooses which one; formulas read it as <code>subject</code>)</small><select id="stSubject"><option value="">– nothing –</option>${forms.filter(f => f.is_class && f.status !== 'archived').map(f => `<option value="${f.id}" ${Number((g.nodes.find(n => n.type === 'start') || {}).subjectForm) === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
           <label>Request form <small class="muted">(what whoever starts this process fills in – in the app, through the API, or on a public web form)</small><select id="stForm"><option value="">– none –</option>${forms.filter(f => f.status !== 'archived').map(f => `<option value="${f.id}" ${Number((g.nodes.find(n => n.type === 'start') || {}).formId) === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
           <label class="check"><input type="checkbox" id="stPublic" ${(g.nodes.find(n => n.type === 'start') || {}).publicEnabled ? 'checked' : ''}><span>Public web form: anyone with the link can send this request, without signing in</span></label>
           ${(g.nodes.find(n => n.type === 'start') || {}).publicToken ? `<div class="link-row"><input readonly class="mono" id="stLink" value="${esc(location.origin + '/#/request/' + g.nodes.find(n => n.type === 'start').publicToken)}"><button type="button" class="btn small" id="stCopy">Copy</button></div><p class="hint">The link works once this process is <b>active</b>. Remove the tick to close the form.</p>` : ''}
@@ -265,6 +266,7 @@
         const s = g.nodes.find(n => n.type === 'start');
         $('#stTags', box).onchange = (e) => { s.startTags = [...e.target.selectedOptions].map(o => Number(o.value)); touch(); };
         $('#stTitle', box).oninput = (e) => { s.title = e.target.value; touch(); };
+        $('#stSubject', box).onchange = (e) => { if (e.target.value) s.subjectForm = Number(e.target.value); else delete s.subjectForm; touch(); drawProps(); };
         $('#stForm', box).onchange = (e) => { s.formId = e.target.value ? Number(e.target.value) : null; touch(); drawProps(); };
         $('#stPublic', box).onchange = (e) => { s.publicEnabled = e.target.checked; touch(); if (!s.publicEnabled) delete s.publicToken; drawProps(); if (s.publicEnabled) toast('Save to create the public link', 'ok'); };
         const cp = $('#stCopy', box); if (cp) cp.onclick = () => { navigator.clipboard.writeText($('#stLink', box).value).then(() => toast('Link copied', 'ok')); };
@@ -291,10 +293,13 @@
             <option value="initiator" ${a.type === 'initiator' ? 'selected' : ''}>Person who started the process</option>
             <option value="tags" ${a.type === 'tags' ? 'selected' : ''}>Everyone with tags…</option>
             <option value="person" ${a.type === 'person' ? 'selected' : ''}>A specific person…</option>
+            <option value="attr" ${a.type === 'attr' ? 'selected' : ''}>Everyone whose attribute is…</option>
             <option value="field" ${a.type === 'field' ? 'selected' : ''}>Person chosen in an earlier form field…</option></select></label>
           ${a.type === 'tags' ? `<label>Must have all of these tags${multiSelect('id="aTags"', FB.tagItems(), a.tagIds)}</label>
             <label>…and share these with the initiator${multiSelect('id="aSame"', meta.categories.map(c => ({ value: c, label: c })), a.sameAs)}</label>
             <p class="hint">Function: Manager + same Department → the initiator's own manager.</p>` : ''}
+          ${a.type === 'attr' ? (() => { const pfs = meta.personFields || [], pf = pfs.find(x => x.key === a.key); return pfs.length ? `<div class="row2"><label>Attribute<select id="aAttr"><option value="">– choose –</option>${pfs.map(x => `<option value="${esc(x.key)}" ${a.key === x.key ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></label>
+            <label>is${pf && (pf.type === 'select' || pf.type === 'radio') ? `<select id="aAttrVal"><option value="">– choose –</option>${(pf.options || []).map(o => `<option ${String(a.value) === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>` : `<input id="aAttrVal" value="${esc(a.value ?? '')}">`}</label></div><p class="hint">Everyone with this attribute value can pick the task up, for example job title = Metrologist.</p>` : '<p class="hint">No person attributes yet. Define them under People &amp; tags › Attributes.</p>'; })() : ''}
           ${a.type === 'person' ? `<label>Person<select id="aPerson">${meta.people.map(p => `<option value="${p.id}" ${Number(a.personId) === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
           ${a.type === 'field' ? `<label>Field key of a Person field<input id="aField" class="mono" value="${esc(a.field || '')}" placeholder="e.g. budget_holder"></label>` : ''}
           <label>Due after (hours) <small class="muted">overdue tasks are flagged and a reminder is sent</small><input type="number" min="0" data-n="dueHours" value="${esc(n.dueHours || '')}"></label>` : ''}
@@ -335,9 +340,10 @@
         if ($('#aSame', box)) n.assignee.sameAs = [...$('#aSame', box).selectedOptions].map(o => o.value);
         if ($('#aPerson', box)) n.assignee.personId = Number($('#aPerson', box).value);
         if ($('#aField', box)) n.assignee.field = $('#aField', box).value.trim();
+        if ($('#aAttr', box)) { n.assignee.key = $('#aAttr', box).value; const pf = (meta.personFields || []).find(x => x.key === n.assignee.key); n.assignee.label = pf ? pf.label : n.assignee.key; n.assignee.value = $('#aAttrVal', box) ? $('#aAttrVal', box).value : ''; }
         touch();
       };
-      ['#aTags', '#aSame', '#aPerson', '#aField'].forEach(s => { const x = $(s, box); if (x) x.addEventListener(x.tagName === 'INPUT' ? 'input' : 'change', upd); });
+      ['#aTags', '#aSame', '#aPerson', '#aField', '#aAttr', '#aAttrVal'].forEach(s => { const x = $(s, box); if (x) x.addEventListener(x.tagName === 'INPUT' ? 'input' : 'change', upd); });
       const d = $('#delSel', box); if (d) d.onclick = removeSel;
     }
 

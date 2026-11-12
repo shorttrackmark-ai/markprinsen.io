@@ -206,6 +206,7 @@
       </div>
       <input class="desc-input" id="fDesc" placeholder="Description (optional)" value="${esc(form.description || '')}">
       <div id="fOrg"></div>
+      <label class="check class-flag"><input type="checkbox" id="fClass" ${form.is_class ? 'checked' : ''}><span><b>This is a class of objects</b> (machine, vehicle, supplier…): every record gets its own page under Objects, and processes can work on it.</span></label>
       ${(usedIn.length || usedByForms.length || usedInDash.length) ? `<p class="muted small">Used in: ${[...usedIn.map(x => `<a href="#/admin/flows/${x.id}">${esc(x.name)}</a>${x.status === 'archived' ? ' (archived)' : ''}`), ...usedByForms.map(x => `form <a href="#/admin/forms/${x.id}">${esc(x.name)}</a>`), ...usedInDash.map(x => `dashboard <a href="#/dashboards/${x.id}">${esc(x.name)}</a>`)].join(' · ')}</p>` : '<p class="muted small">Not used anywhere yet.</p>'}
       <div class="seg tabs"><button data-tab="fields" class="on">Fields</button><button data-tab="checks">Logic checks</button><button data-tab="access">Access</button></div>
       <div id="fBody"></div></div>`;
@@ -215,6 +216,7 @@
     $('#fDesc').oninput = (e) => { form.description = e.target.value; touch(); };
     $('#fSave').onclick = save;
     FB.org.bar($('#fOrg'), form, {}, touch);
+    $('#fClass').onchange = (e) => { form.is_class = e.target.checked ? 1 : 0; touch(); };
     $('#fArchive').onclick = async () => {
       form.status = form.status === 'archived' ? 'active' : 'archived';
       if (form.status === 'archived' && !confirm('Archive this form? Nobody can add records to it any more; the data stays and can be restored.')) { form.status = 'active'; return; }
@@ -235,7 +237,7 @@
       const problems = FB.logic.lint(form);
       if (problems.length) { toast(problems[0], 'error'); return; }
       try {
-        await FB.api.put('/admin/forms/' + form.id, { name: form.name, description: form.description, fields: form.fields, checks: form.checks, access: form.access, area_id: form.area_id, owner_id: form.owner_id, status: form.status });
+        await FB.api.put('/admin/forms/' + form.id, { name: form.name, description: form.description, fields: form.fields, checks: form.checks, access: form.access, area_id: form.area_id, owner_id: form.owner_id, status: form.status, is_class: form.is_class ? 1 : 0 });
         dirty = false; $('#fSave').textContent = 'Save'; toast('Form saved', 'ok'); FB.loadMeta();
       } catch (e) { toast(e.message, 'error'); }
     }

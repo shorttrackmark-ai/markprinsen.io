@@ -31,19 +31,19 @@ export async function seedDemo(db, admin, bucket) {
 
   const demoHash = await hashPassword(DEMO_PASSWORD);
   const P = {};
-  const person = (key, name, email, hash, isAdmin, tags) => {
+  const person = (key, name, email, hash, isAdmin, tags, attrs = {}) => {
     const pid = id('persons');
-    M.persons.push({ id: pid, name, email, pw_hash: hash, is_admin: isAdmin ? 1 : 0, active: 1, created_at: at() });
+    M.persons.push({ id: pid, name, email, pw_hash: hash, is_admin: isAdmin ? 1 : 0, active: 1, attrs: JSON.stringify(attrs), created_at: at() });
     tags.forEach(t => M.person_tags.push({ person_id: pid, tag_id: T[t] }));
     P[key] = pid;
   };
-  person('admin', admin.name, admin.email, admin.hash, true, ['Function:HR', 'Department:Operations', 'Location:Amsterdam']);
-  person('anna', 'Anna de Vries', 'anna@example.com', demoHash, false, ['Function:Manager', 'Department:Sales', 'Location:Amsterdam']);
-  person('bram', 'Bram Jansen', 'bram@example.com', demoHash, false, ['Function:Employee', 'Department:Sales', 'Location:Amsterdam']);
-  person('sanne', 'Sanne Bakker', 'sanne@example.com', demoHash, false, ['Function:Employee', 'Department:Sales', 'Location:Rotterdam']);
-  person('carla', 'Carla Smit', 'carla@example.com', demoHash, false, ['Function:Employee', 'Department:Operations', 'Location:Rotterdam']);
-  person('daan', 'Daan Visser', 'daan@example.com', demoHash, false, ['Function:Manager', 'Department:Operations', 'Location:Rotterdam']);
-  person('eva', 'Eva Mulder', 'eva@example.com', demoHash, false, ['Function:Finance', 'Department:Finance', 'Location:Amsterdam']);
+  person('admin', admin.name, admin.email, admin.hash, true, ['Function:HR', 'Department:Operations', 'Location:Amsterdam'], { job_title: 'Quality engineer', employee_no: 'E-1001' });
+  person('anna', 'Anna de Vries', 'anna@example.com', demoHash, false, ['Function:Manager', 'Department:Sales', 'Location:Amsterdam'], { job_title: 'Manager', employee_no: 'E-1002' });
+  person('bram', 'Bram Jansen', 'bram@example.com', demoHash, false, ['Function:Employee', 'Department:Sales', 'Location:Amsterdam'], { job_title: 'Sales', employee_no: 'E-1003' });
+  person('sanne', 'Sanne Bakker', 'sanne@example.com', demoHash, false, ['Function:Employee', 'Department:Sales', 'Location:Rotterdam'], { job_title: 'Sales', employee_no: 'E-1004' });
+  person('carla', 'Carla Smit', 'carla@example.com', demoHash, false, ['Function:Employee', 'Department:Operations', 'Location:Rotterdam'], { job_title: 'Metrologist', employee_no: 'E-1005' });
+  person('daan', 'Daan Visser', 'daan@example.com', demoHash, false, ['Function:Manager', 'Department:Operations', 'Location:Rotterdam'], { job_title: 'Manager', employee_no: 'E-1006' });
+  person('eva', 'Eva Mulder', 'eva@example.com', demoHash, false, ['Function:Finance', 'Department:Finance', 'Location:Amsterdam'], { job_title: 'Finance', employee_no: 'E-1007' });
   const D = makeDirectory(M.persons, M.tags, M.person_tags);
 
   // ---- areas: how everything is grouped (a department or domain that offers processes to the rest) ----
@@ -57,7 +57,7 @@ export async function seedDemo(db, admin, bucket) {
   const forms = new Map();
   const form = (name, description, fields, extra = {}) => {
     const fid = id('forms');
-    const f = { id: fid, name, slug: slugify(name), description, fields, checks: extra.checks || [], access: extra.access || {}, area_id: null, status: 'active', owner_id: P.admin, updated_at: at() };
+    const f = { id: fid, name, slug: slugify(name), description, fields, checks: extra.checks || [], access: extra.access || {}, area_id: null, status: 'active', owner_id: P.admin, is_class: extra.cls ? 1 : 0, updated_at: at() };
     M.forms.push(f); forms.set(fid, f);
     return fid;
   };
@@ -118,6 +118,22 @@ export async function seedDemo(db, admin, bucket) {
     { key: 'action', label: 'Corrective action', type: 'textarea', required: true },
     { key: 'owner', label: 'Action owner', type: 'person', required: true },
     { key: 'deadline', label: 'Deadline', type: 'date', required: true, default: 'ADDDAYS(TODAY(), 30)', validate: 'deadline >= TODAY()', validateMsg: 'Deadline must be in the future.' },
+  ], { access: { direct: false } });
+
+  const machineForm = form('Machine', 'Equipment that needs calibration. Each machine has its own page with its calibration history.', [
+    { key: 'name', label: 'Name', type: 'text', required: true },
+    { key: 'machine_id', label: 'Machine number', type: 'text', required: true, width: 'half', format: 'code' },
+    { key: 'location', label: 'Location', type: 'select', options: ['Hall A', 'Workshop', 'Quality lab', 'Warehouse'], required: true, width: 'half' },
+    { key: 'status', label: 'Status', type: 'select', options: ['In service', 'Out of service'], required: true, default: 'In service', width: 'half' },
+    { key: 'interval_days', label: 'Calibration interval (days)', type: 'number', required: true, min: 1, default: '365', width: 'half' },
+    { key: 'last_calibrated', label: 'Last calibrated', type: 'date', width: 'half' },
+    { key: 'next_due', label: 'Next calibration due', type: 'date', width: 'half' },
+  ], { cls: true, access: { addTags: [T['Function:Manager']] } });
+  const calibrationForm = form('Calibration result', 'Outcome of a calibration, entered by the metrologist.', [
+    { key: 'measured_on', label: 'Calibrated on', type: 'date', required: true, default: 'TODAY()', width: 'half', validate: 'measured_on <= TODAY()', validateMsg: 'Cannot be in the future.' },
+    { key: 'result', label: 'Result', type: 'radio', options: ['Within tolerance', 'Out of tolerance'], required: true, width: 'half' },
+    { key: 'deviation', label: 'Largest deviation (%)', type: 'number', min: 0, max: 100, decimals: 2 },
+    { key: 'remarks', label: 'Remarks', type: 'textarea', required: true, visibleIf: 'result == "Out of tolerance"' },
   ], { access: { direct: false } });
 
   // ---- flows (with handbook documentation) ----
@@ -187,6 +203,24 @@ export async function seedDemo(db, admin, bucket) {
       ],
     });
 
+  const calibrationFlow = flow('Machine calibration', 'Calibrate a machine; the result updates the machine record.',
+    { purpose: 'Keep every measuring and production machine within tolerance, with a trace of who calibrated what and when (ISO 9001 §7.1.5).', owner: 'Operations', scope: 'All machines in the Machine register', records: 'Calibration results are kept with the machine record.' }, {
+      nodes: [
+        { id: 'n1', type: 'start', name: 'Start', x: 80, y: 190, subjectForm: machineForm, title: '"Calibration " & subject.label' },
+        { id: 'n2', type: 'task', name: 'Calibrate', x: 270, y: 190, formId: calibrationForm, assignee: { type: 'attr', key: 'job_title', value: 'Metrologist', label: 'Job title' }, dueHours: 72, instructions: 'Use the reference standard. Record the largest deviation you measured.' },
+        { id: 'n3', type: 'decision', name: 'Within tolerance?', x: 470, y: 190 },
+        { id: 'n4', type: 'record', name: 'Set machine in service', x: 670, y: 110, formId: machineForm, mode: 'update', recordId: 'subject.id', mapping: 'status = "In service"\nlast_calibrated = measured_on\nnext_due = ADDDAYS(measured_on, subject.interval_days)' },
+        { id: 'n5', type: 'record', name: 'Take machine out of service', x: 670, y: 290, formId: machineForm, mode: 'update', recordId: 'subject.id', mapping: 'status = "Out of service"\nlast_calibrated = measured_on' },
+        { id: 'n6', type: 'end', name: 'Calibrated', x: 880, y: 110 },
+        { id: 'n7', type: 'end', name: 'Out of service', x: 880, y: 290 },
+      ],
+      edges: [
+        { id: 'e1', from: 'n1', to: 'n2' }, { id: 'e2', from: 'n2', to: 'n3' },
+        { id: 'e3', from: 'n3', to: 'n4', label: 'Yes', condition: 'result == "Within tolerance"' }, { id: 'e4', from: 'n3', to: 'n5', label: 'No' },
+        { id: 'e5', from: 'n4', to: 'n6' }, { id: 'e6', from: 'n5', to: 'n7' },
+      ],
+    });
+
   // ---- in-memory engine io ----
   function memIO(proc) {
     return {
@@ -199,10 +233,17 @@ export async function seedDemo(db, admin, bucket) {
     };
   }
   const procs = new Map();
-  function start(flowId, pid) {
+  function start(flowId, pid, subjectId) {
     const f = flows.get(flowId);
     const iid = id('instances');
     const proc = { id: iid, flowName: f.name, graph: f.graph, vars: { initiator: D.profile(pid), process: f.name }, title: `${f.name} #${iid}`, status: 'running', started_by: pid, finished_at: null, created_at: at(), flow_id: flowId };
+    const sf = startNode(f.graph).subjectForm;
+    if (sf && subjectId) {
+      const rec = M.submissions.find(x => x.id === subjectId), sform = forms.get(sf);
+      proc.subject_form_id = sf; proc.subject_id = subjectId;
+      proc.vars.subject = { ...rec.data, id: subjectId, label: recordLabel(sform, subjectId, rec.data) }; proc.vars[sform.slug] = proc.vars.subject;
+      proc.title = `${f.name} – ${proc.vars.subject.label}`;
+    }
     procs.set(iid, proc);
     const io = memIO(proc);
     io.log(`Started by ${D.persons.get(pid).name}`, pid);
@@ -290,8 +331,26 @@ export async function seedDemo(db, admin, bucket) {
   // Order register statuses: older orders are delivered
   for (const s of M.submissions.filter(x => x.form_id === orderForm)) if (Date.parse(s.created_at.replace(' ', 'T') + 'Z') < NOW - 20 * DAY) s.data.status = 'Delivered';
 
+  // machines: some due soon, some overdue; a few calibrations done through the process, one waiting for the metrologist
+  const MACHINES = [['CNC lathe 1', 'M-001', 'Hall A', 365, 350], ['Press brake', 'M-002', 'Hall A', 180, 200], ['Torque wrench set', 'M-003', 'Workshop', 90, 30], ['Coordinate measuring machine', 'M-004', 'Quality lab', 365, 100], ['Pallet scale', 'M-005', 'Warehouse', 365, 400], ['Annealing furnace 2', 'M-006', 'Hall A', 365, 380]];
+  const machineIds = {};
+  MACHINES.forEach(([name, code, location, interval, ago], i) => {
+    clock = NOW - 160 * DAY + i * HOUR;
+    const mid = id('submissions'), last = NOW - ago * DAY;
+    M.submissions.push({ id: mid, form_id: machineForm, person_id: P.daan, data: { name, machine_id: code, location, status: 'In service', interval_days: interval, last_calibrated: iso(last), next_due: iso(last + interval * DAY) }, created_at: at() });
+    machineIds[code] = mid;
+  });
+  for (const [code, ok, daysAgo] of [['M-002', true, 6], ['M-006', false, 3]]) {
+    clock = NOW - daysAgo * DAY;
+    const iid = start(calibrationFlow, P.daan, machineIds[code]);
+    clock += 3 * HOUR;
+    complete(iid, { measured_on: iso(clock), result: ok ? 'Within tolerance' : 'Out of tolerance', deviation: ok ? 0.12 : 2.4, remarks: ok ? null : 'Heating element drifts; spare part ordered.' }, P.carla);
+  }
+  clock = NOW - 20 * HOUR;
+  start(calibrationFlow, P.daan, machineIds['M-005']);   // waits for a metrologist
+
   clock = NOW;
-  for (const proc of procs.values()) M.instances.push({ id: proc.id, flow_id: proc.flow_id, flow_version: 1, graph: JSON.stringify(proc.graph), title: proc.title, status: proc.status, vars: JSON.stringify(proc.vars), started_by: proc.started_by, created_at: proc.created_at, finished_at: proc.finished_at });
+  for (const proc of procs.values()) M.instances.push({ id: proc.id, flow_id: proc.flow_id, flow_version: 1, graph: JSON.stringify(proc.graph), title: proc.title, status: proc.status, vars: JSON.stringify(proc.vars), started_by: proc.started_by, created_at: proc.created_at, finished_at: proc.finished_at, subject_form_id: proc.subject_form_id || null, subject_id: proc.subject_id || null });
 
   // ---- dashboards ----
   M.dashboards.push({ id: id('dashboards'), name: 'Operations overview', access: '{}', updated_at: at(), widgets: JSON.stringify([
@@ -304,6 +363,7 @@ export async function seedDemo(db, admin, bucket) {
     { id: 'w7', title: 'Spend by supplier (€)', type: 'bar', w: 2, src: 'form_purchase_request', agg: 'sum', field: 'total_incl', groupBy: 'supplier_label', prefix: '€ ', decimals: 0 },
     { id: 'w8', title: 'Leave days by department', type: 'hbar', w: 1, mode: 'sql', sql: "SELECT d.value AS department, sum(l.days) AS days\nFROM form_leave_request l\nJOIN v_people d ON d.person_id = l.person_id AND d.category = 'Department'\nGROUP BY 1 ORDER BY 2 DESC", suffix: ' d', decimals: 0 },
     { id: 'w9', title: 'Average approval time (hours)', type: 'hbar', w: 1, mode: 'sql', sql: "SELECT task, round(avg(hours_open), 1) AS hours\nFROM v_tasks WHERE status = 'done' AND task LIKE '%approval%'\nGROUP BY 1 ORDER BY 2 DESC", suffix: ' h' },
+    { id: 'w11', title: 'Calibration overdue', type: 'kpi', w: 1, src: 'form_machine', agg: 'count', where: "next_due < date('now')", caption: 'machines past their calibration date' },
     { id: 'w10', title: 'Order register', type: 'table', w: 2, mode: 'sql', sql: 'SELECT id AS "#", substr(created_at, 1, 10) AS date, item, supplier, amount AS "€ incl. VAT", status, pay_before\nFROM form_order_register ORDER BY id DESC LIMIT 8' },
   ]) });
   // ---- the document library: norms, policies and work instructions, linked to the steps where they matter ----
@@ -314,6 +374,8 @@ export async function seedDemo(db, admin, bucket) {
       text: 'PURCHASING NORM\n\nApproval limits per purchase:\n- up to EUR 250: no approval\n- EUR 250 to 1,000: budget holder\n- above EUR 1,000: budget holder and Finance\n\nOnly buy from approved suppliers (see register Supplier). Keep the quote with the request.\nInvoices are paid within the supplier payment term.\n' },
     { name: 'Incident handling: work instruction', kind: 'instruction', area: 'ops', folder: 'Quality / Work instructions', owner: 'daan', file: 'incident-instruction.txt', link: ['Incident & corrective action', 'Root cause & action', 'Step 3: 5x why'],
       text: 'WORK INSTRUCTION: INCIDENTS\n\n1. Make the situation safe first.\n2. Report the incident in Ordovia the same day: what, where, risk (low, medium, high).\n3. Medium and high risks get a root-cause analysis within 5 days (5x why).\n4. Agree a corrective action, an owner and a date; check the effect after 30 days.\n' },
+    { name: 'Calibration procedure', kind: 'instruction', area: 'ops', folder: 'Quality / Work instructions', owner: 'daan', file: 'calibration-procedure.txt', link: ['Machine calibration', 'Calibrate', 'Section 2: tolerances'],
+      text: 'CALIBRATION PROCEDURE\n\n1. Use only reference standards with a valid certificate.\n2. Tolerance: a machine is within tolerance when the largest deviation is at most 0.5 percent.\n3. Record the date and the largest deviation in Ordovia; the machine record is updated automatically.\n4. A machine out of tolerance is taken out of service until it is adjusted and calibrated again.\n' },
     { name: 'ISO 9001 quality manual (summary)', kind: 'norm', area: 'ops', folder: 'Quality / ISO 9001', owner: 'daan', file: 'iso9001-summary.txt', link: [],
       text: 'ISO 9001 – SUMMARY FOR OUR TEAMS\n\nWe keep documented information, control changes, review processes at least yearly, handle non-conformities with corrective action and measure customer satisfaction.\n' },
   ];
@@ -327,10 +389,14 @@ export async function seedDemo(db, admin, bucket) {
   }
 
   M.settings.push({ key: 'demo', value: '1' });
+  M.settings.push({ key: 'person_fields', value: JSON.stringify([
+    { key: 'job_title', label: 'Job title', type: 'select', options: ['Operator', 'Metrologist', 'Quality engineer', 'Sales', 'Finance', 'HR', 'Manager'] },
+    { key: 'employee_no', label: 'Employee number', type: 'text', format: 'code' },
+  ]) });
 
   // ---- who owns what, and in which area ----
-  const FORM_AREA = { 'Supplier': 'fin', 'Leave request': 'hr', 'Approval': 'fin', 'Purchase request': 'fin', 'Order register': 'fin', 'Incident report': 'ops', 'Corrective action': 'ops' };
-  const FLOW_AREA = { 'Leave request': ['hr', 'admin'], 'Purchase request': ['fin', 'eva'], 'Incident & corrective action': ['ops', 'daan'] };
+  const FORM_AREA = { 'Machine': 'ops', 'Calibration result': 'ops', 'Supplier': 'fin', 'Leave request': 'hr', 'Approval': 'fin', 'Purchase request': 'fin', 'Order register': 'fin', 'Incident report': 'ops', 'Corrective action': 'ops' };
+  const FLOW_AREA = { 'Machine calibration': ['ops', 'daan'], 'Leave request': ['hr', 'admin'], 'Purchase request': ['fin', 'eva'], 'Incident & corrective action': ['ops', 'daan'] };
   for (const f of M.forms) f.area_id = A[FORM_AREA[f.name]] || null;
   for (const f of M.flows) { const m = FLOW_AREA[f.name]; if (m) { f.area_id = A[m[0]]; f.owner_id = P[m[1]]; } }
   for (const f of M.flows) M.flow_versions.push({ id: id('flow_versions'), flow_id: f.id, version: 1, name: f.name, graph: f.graph, doc: f.doc, saved_at: at(), saved_by: P.admin });
@@ -339,12 +405,12 @@ export async function seedDemo(db, admin, bucket) {
   // ---- write everything ----
   const enc = (v) => (v && typeof v === 'object' ? JSON.stringify(v) : v);
   const COLS = {
-    settings: ['key', 'value'], persons: ['id', 'name', 'email', 'pw_hash', 'is_admin', 'active', 'created_at'],
+    settings: ['key', 'value'], persons: ['id', 'name', 'email', 'pw_hash', 'is_admin', 'active', 'attrs', 'created_at'],
     tags: ['id', 'category', 'value'], person_tags: ['person_id', 'tag_id'],
     areas: ['id', 'name', 'description', 'color', 'owner_id', 'created_at'],
-    forms: ['id', 'name', 'slug', 'description', 'fields', 'checks', 'access', 'area_id', 'status', 'owner_id', 'updated_at'],
+    forms: ['id', 'name', 'slug', 'description', 'fields', 'checks', 'access', 'area_id', 'status', 'owner_id', 'is_class', 'updated_at'],
     flows: ['id', 'name', 'description', 'graph', 'doc', 'version', 'area_id', 'status', 'owner_id', 'review_months', 'reviewed_at', 'updated_at'],
-    instances: ['id', 'flow_id', 'flow_version', 'graph', 'title', 'status', 'vars', 'started_by', 'created_at', 'finished_at'],
+    instances: ['id', 'flow_id', 'flow_version', 'graph', 'title', 'status', 'vars', 'started_by', 'created_at', 'finished_at', 'subject_form_id', 'subject_id'],
     tasks: ['id', 'instance_id', 'node_id', 'name', 'form_id', 'assignee', 'status', 'due_at', 'completed_by', 'submission_id', 'created_at', 'completed_at'],
     submissions: ['id', 'form_id', 'person_id', 'instance_id', 'task_id', 'data', 'created_at', 'updated_at'],
     events: ['id', 'instance_id', 'person_id', 'message', 'created_at'],

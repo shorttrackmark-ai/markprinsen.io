@@ -48,3 +48,10 @@ Integration: *API tokens* (act as a chosen person), *public web forms* (a servic
 
 ## One address (built)
 The example no longer has its own Worker. `ordovia` has a second D1 (`DB_DEMO`) and R2 bucket (`FILES_DEMO`); "Try the example" sets the cookie `ordovia_mode=example`, and from then on that browser's requests use the example database and its own session cookie. "Exit example" clears it. Hourly cron resets the example at 03:xx UTC. `npm run deploy` migrates both databases. The old `ordovia-demo` Worker is obsolete.
+
+## Classes and objects (stage 1, built)
+- **Class** = a form with `is_class = 1` (tick "This is a class of objects" in the form builder). Its records are **objects**: each has a page under Objects (attributes, processes that worked on it, processes you can start on it).
+- **Subject**: the start step of a flow can say "Works on: <class>" (`node.subjectForm`). Whoever starts it chooses the object; the run stores `subject_form_id` / `subject_id`, and formulas read it as `subject.<attribute>` (also under the class slug). A Record step with mode update and record id `subject.id` writes results back to the object.
+- **Person attributes** (`persons.attrs`, field definitions in settings `person_fields`): job title, employee number... Formulas read `initiator.job_title`; a task can be assigned to "everyone whose attribute is ..." (`assignee {type:'attr', key, value, label}`).
+- Example: Machine class + "Machine calibration" process (metrologist by job title; result updates the machine).
+- Not yet: file/photo attributes on persons, time-driven starts ("calibration due in 30 days"), a sub-process step, class library packs.

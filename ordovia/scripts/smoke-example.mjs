@@ -16,7 +16,7 @@ async function call(method, path, body) {
 let r = await call('GET', '/api/session'); ok(r.data.setup === true && r.data.settings.canTryExample === true && r.data.settings.demoSite === false, 'a fresh real workspace offers the example', r.data);
 r = await call('POST', '/api/demo/enter', { as: 'anna' }); ok(r.status === 200, 'enter the example as Anna', r);
 r = await call('GET', '/api/session'); ok(r.data.setup === false && r.data.settings.demoSite === true && r.data.user && r.data.user.email === 'anna@example.com' && r.data.settings.canTryExample === false, 'the example answers with its own data and sign-in', r.data);
-r = await call('GET', '/api/home'); ok(r.status === 200 && r.data.flows.length === 3, 'Anna sees the three example processes');
+r = await call('GET', '/api/home'); ok(r.status === 200 && r.data.flows.length === 4, 'Anna sees the four example processes');
 r = await call('GET', '/api/admin/people'); ok(r.status === 403, 'Anna is a colleague, not an administrator');
 r = await call('POST', '/api/demo/leave'); ok(r.status === 200, 'leave the example');
 r = await call('GET', '/api/session'); ok(r.data.setup === true && r.data.user === null && r.data.settings.demoSite === false, 'back in the untouched real workspace: still waiting for setup', r.data);

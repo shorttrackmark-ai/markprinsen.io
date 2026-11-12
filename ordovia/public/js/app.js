@@ -19,6 +19,7 @@
       ${link('#/areas', '◫', 'Areas', '/area')}
       ${link('#/processes', '⟳', 'Runs', '/processes')}
       ${link('#/handbook', '❖', 'Handbook', '/handbook')}
+      ${link('#/objects', '◈', 'Objects', '/objects')}
       ${link('#/documents', '❏', 'Documents', '/documents')}
       ${link('#/data', '▦', 'Data', '/data')}
       ${link('#/dashboards', '▣', 'Dashboards', '/dashboards')}</div>
@@ -165,7 +166,7 @@
     const done = new Set(d.tasks.filter(t => t.status === 'done').map(t => t.node_id));
     const open = new Set(d.tasks.filter(t => t.status === 'open').map(t => t.node_id));
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/processes">← Processes</a><h1>${esc(inst.title)}</h1>
-      <p class="muted">${esc(inst.flow)} · started by ${esc(inst.started_by || '?')} · ${esc(fmtDate(inst.created_at))}</p></div>
+      <p class="muted">${esc(inst.flow)}${d.subject ? ` · about <a href="#/objects/${d.subject.formId}/${d.subject.id}">${esc(d.subject.form)}: ${esc(d.subject.label)}</a>` : ''} · started by ${esc(inst.started_by || '?')} · ${esc(fmtDate(inst.created_at))}</p></div>
       <div class="actions"><span class="status s-${esc(inst.status)}">${esc(inst.status)}${inst.outcome ? ' · ' + esc(inst.outcome) : ''}</span>
       ${FB.isAdmin() ? '<button class="btn danger ghost small" id="pDel">Delete</button>' : ''}</div></div>
       <div class="card mini-flow">${FB.flows.static(d.graph, done, open)}</div>
@@ -355,16 +356,18 @@
 
   // ---------------- admin: people ----------------
   FB.route('/admin/people', async (main) => {
-    const { people, tags, categories: cats } = await api.get('/admin/people');
-    main.innerHTML = `<div class="page page-wide"><div class="page-head"><h1>People &amp; tags</h1><div class="actions"><button class="btn" id="nt">+ Tag</button><button class="btn primary" id="np">+ Person</button></div></div>
-      <p class="muted">Tags (function, department, location, team, …) decide who can start a process, who receives a task and who sees which data.</p>
-      <div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>E-mail</th>${cats.map(c => `<th>${esc(c)}</th>`).join('')}<th>Admin</th><th></th></tr></thead><tbody>
+    const { people, tags, categories: cats, personFields: pfields } = await api.get('/admin/people');
+    main.innerHTML = `<div class="page page-wide"><div class="page-head"><h1>People &amp; tags</h1><div class="actions"><button class="btn" id="nat">Attributes…</button><button class="btn" id="nt">+ Tag</button><button class="btn primary" id="np">+ Person</button></div></div>
+      <p class="muted">Tags (department, location, team, …) and attributes (job title, employee number, …) decide who can start a process, who receives a task and who sees which data.</p>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>E-mail</th>${pfields.map(f => `<th>${esc(f.label)}</th>`).join('')}${cats.map(c => `<th>${esc(c)}</th>`).join('')}<th>Admin</th><th></th></tr></thead><tbody>
       ${people.map(p => `<tr class="${p.active ? '' : 'inactive'}"><td>${esc(p.name)}</td><td>${esc(p.email)}</td>
+        ${pfields.map(f => `<td>${p.attrs[f.key] == null || p.attrs[f.key] === '' ? '<span class="muted">–</span>' : esc(String(p.attrs[f.key]))}</td>`).join('')}
         ${cats.map(c => `<td>${tags.filter(t => t.category === c && p.tagIds.includes(t.id)).map(t => `<span class="tag">${esc(t.value)}</span>`).join(' ')}</td>`).join('')}
         <td>${p.is_admin ? '✓' : ''}</td><td><button class="btn small" data-edit="${p.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>
       <h2>Tags</h2><div class="tag-cloud">${cats.map(c => `<div class="card"><h4>${esc(c)}</h4>${tags.filter(t => t.category === c).map(t => `<span class="tag">${esc(t.value)} <button class="tag-x" data-deltag="${t.id}" title="Delete tag">×</button></span>`).join(' ')}</div>`).join('')}</div></div>`;
     const done = async () => { await FB.loadMeta(); FB.render(); };
     $('#np', main).onclick = () => editPerson(null);
+    $('#nat', main).onclick = () => editAttributes();
     $$('[data-edit]', main).forEach(b => b.onclick = () => editPerson(Number(b.dataset.edit)));
     $$('[data-deltag]', main).forEach(b => b.onclick = async () => { if (confirm('Delete this tag from everyone?')) { await api.del('/admin/tags/' + b.dataset.deltag); done(); } });
     $('#nt', main).onclick = () => {
@@ -373,11 +376,19 @@
       $('#tf', m.root).onsubmit = async (e) => { e.preventDefault(); try { await api.post('/admin/tags', { category: e.target.category.value, value: e.target.value.value }); m.close(); done(); } catch (err) { toast(err.message, 'error'); } };
     };
     function editPerson(pid) {
-      const p = pid ? people.find(x => x.id === pid) : { name: '', email: '', is_admin: 0, active: 1, tagIds: [] };
+      const p = pid ? people.find(x => x.id === pid) : { name: '', email: '', is_admin: 0, active: 1, tagIds: [], attrs: {} };
+      const attrInput = (f, v) => {
+        const nm = `name="attr:${esc(f.key)}"`;
+        if (f.type === 'select' || f.type === 'radio') return `<select ${nm}><option value="">–</option>${(f.options || []).map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+        if (f.type === 'checkbox') return `<input type="checkbox" ${nm} ${v ? 'checked' : ''}>`;
+        if (f.type === 'textarea') return `<textarea ${nm} rows="2">${esc(v ?? '')}</textarea>`;
+        return `<input ${nm} type="${['number', 'date', 'email'].includes(f.type) ? f.type : 'text'}" step="any" value="${esc(v ?? '')}">`;
+      };
       const m = modal(pid ? 'Edit person' : 'New person', `<form id="pf">
         <label>Name<input name="name" required value="${esc(p.name)}"></label>
         <label>E-mail<input name="email" type="email" required value="${esc(p.email)}"></label>
         <label>Password ${pid ? '<small class="muted">(leave empty to keep)</small>' : '<small class="muted">(at least 8 characters)</small>'}<input name="password" type="password" minlength="8" autocomplete="new-password" ${pid ? '' : 'required'}></label>
+        ${pfields.length ? `<fieldset><legend>Attributes</legend><div class="row2">${pfields.map(f => `<label>${esc(f.label)}${attrInput(f, p.attrs[f.key])}</label>`).join('')}</div></fieldset>` : ''}
         ${cats.map(c => `<fieldset><legend>${esc(c)}</legend>${tags.filter(t => t.category === c).map(t => `<label class="check inline"><input type="checkbox" name="tag" value="${t.id}" ${p.tagIds.includes(t.id) ? 'checked' : ''}><span>${esc(t.value)}</span></label>`).join('')}</fieldset>`).join('')}
         <label class="check"><input type="checkbox" name="is_admin" ${p.is_admin ? 'checked' : ''}><span>Administrator (builds flows, forms, dashboards; uses SQL)</span></label>
         <label class="check"><input type="checkbox" name="active" ${p.active ? 'checked' : ''}><span>Active</span></label>
@@ -385,10 +396,31 @@
       $('#pf', m.root).onsubmit = async (e) => {
         e.preventDefault();
         const f = e.target;
-        const body = { name: f.name.value, email: f.email.value, password: f.password.value || undefined, is_admin: f.is_admin.checked, active: f.active.checked, tagIds: $$('input[name="tag"]:checked', f).map(c => Number(c.value)) };
+        const body = { name: f.name.value, email: f.email.value, password: f.password.value || undefined, is_admin: f.is_admin.checked, active: f.active.checked, tagIds: $$('input[name="tag"]:checked', f).map(c => Number(c.value)),
+          attrs: Object.fromEntries(pfields.map(af => { const i = f.elements['attr:' + af.key]; return [af.key, !i ? null : af.type === 'checkbox' ? i.checked : af.type === 'number' ? (i.value === '' ? null : Number(i.value)) : (i.value === '' ? null : i.value)]; })) };
         try { if (pid) await api.put('/admin/people/' + pid, body); else await api.post('/admin/people', body); m.close(); toast('Saved', 'ok'); done(); }
-        catch (err) { toast(err.message, 'error'); }
+        catch (err) { toast(err.data && err.data.errors ? Object.values(err.data.errors)[0] : err.message, 'error'); }
       };
+    }
+    /** Which attributes every person has: the Person class. */
+    function editAttributes() {
+      const rows = pfields.map(f => ({ ...f }));
+      const m = modal('Person attributes', '<div id="paBox"></div>', { wide: true });
+      const TYPES = [['text', 'Text'], ['select', 'Dropdown'], ['number', 'Number'], ['date', 'Date'], ['email', 'E-mail'], ['checkbox', 'Yes / no'], ['textarea', 'Long text']];
+      const draw = () => {
+        $('#paBox', m.root).innerHTML = `<p class="muted small">Attributes every person has, besides name and e-mail. A flow can send a task to “everyone whose job title is Metrologist”, and formulas can read them (<code>initiator.job_title</code>).</p>
+          ${rows.map((f, i) => `<div class="check-row pa-row" data-i="${i}"><input data-k="label" value="${esc(f.label || '')}" placeholder="Name, e.g. Job title"><select data-k="type">${TYPES.map(([v, l]) => `<option value="${v}" ${f.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select><button type="button" class="icon-btn danger" data-del="${i}" title="Remove">×</button>
+            ${f.type === 'select' ? `<input data-k="options" class="pa-options" value="${esc((f.options || []).join(', '))}" placeholder="Options, separated by commas">` : ''}</div>`).join('') || '<p class="muted">No attributes yet.</p>'}
+          <div class="form-actions"><button type="button" class="btn" id="paAdd">+ Attribute</button><button type="button" class="btn primary" id="paSave">Save</button></div>`;
+        $$('[data-i]', m.root).forEach(row => { const i = Number(row.dataset.i); $$('[data-k]', row).forEach(inp => inp.onchange = () => { const k = inp.dataset.k; rows[i][k] = k === 'options' ? inp.value.split(',').map(x => x.trim()).filter(Boolean) : inp.value; if (k === 'type') draw(); }); });
+        $$('[data-del]', m.root).forEach(b => b.onclick = () => { rows.splice(Number(b.dataset.del), 1); draw(); });
+        $('#paAdd', m.root).onclick = () => { rows.push({ label: '', type: 'text' }); draw(); };
+        $('#paSave', m.root).onclick = async () => {
+          try { await api.put('/admin/person-fields', { fields: rows.filter(r => (r.label || '').trim()).map(r => ({ key: r.key, label: r.label, type: r.type, ...(r.type === 'select' ? { options: r.options || [] } : {}) })) }); m.close(); toast('Saved', 'ok'); await FB.loadMeta(); FB.render(); }
+          catch (err) { toast(err.message, 'error'); }
+        };
+      };
+      draw();
     }
   }, { admin: true });
 

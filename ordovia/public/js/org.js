@@ -86,20 +86,30 @@
     });
   };
 
-  const startFlow = async (id, btn) => {
+  const startFlow = async (id, btn, subject) => {
     if (btn) btn.disabled = true;
-    try { const r = await api.post(`/flows/${id}/start`); toast('Process started', 'ok'); FB.refreshBadge && FB.refreshBadge(); FB.go(r.taskId ? '#/task/' + r.taskId : '#/processes/' + r.instanceId); }
+    try { const r = await api.post(`/flows/${id}/start`, subject ? { subject } : undefined); toast('Process started', 'ok'); FB.refreshBadge && FB.refreshBadge(); FB.go(r.taskId ? '#/task/' + r.taskId : '#/processes/' + r.instanceId); }
     catch (e) { toast(e.message, 'error'); if (btn) btn.disabled = false; }
   };
   Org.startFlow = startFlow;
   /** Start a process: if it has a request form, ask for that first (the same input the API and the public web form take). */
-  Org.start = (flow, btn) => {
+  Org.start = async (flow, btn, subject) => {
+    // a process that works on an object (a machine, a vehicle...) first needs to know which one
+    if (flow.subject_form_id && !subject) {
+      const cls = FB.state.meta.forms.find(f => f.id === Number(flow.subject_form_id));
+      const list = (await api.get('/objects/' + Number(flow.subject_form_id))).objects;
+      const box = document.createElement('div');
+      const m = modal(flow.name, box);
+      box.innerHTML = list.length ? `<form><label>Which ${esc((cls ? cls.name : 'object').toLowerCase())}?<select name="subject" required><option value="">– choose –</option>${list.map(o => `<option value="${o.id}">${esc(o.label)}</option>`).join('')}</select></label><div class="form-actions"><button class="btn primary">Continue</button></div></form>` : `<p class="muted">There are no ${esc((cls ? cls.name : 'object').toLowerCase())} objects yet. <a href="#/objects/${Number(flow.subject_form_id)}">Add one first.</a></p>`;
+      const fm = $('form', box); if (fm) fm.onsubmit = (e) => { e.preventDefault(); m.close(); Org.start(flow, btn, Number(fm.subject.value)); };
+      return;
+    }
     const form = flow.form_id ? FB.state.meta.forms.find(f => f.id === Number(flow.form_id)) : null;
-    if (!form) return startFlow(flow.id, btn);
+    if (!form) return startFlow(flow.id, btn, subject);
     const box = document.createElement('div');
     const m = modal(flow.name, box, { wide: true });
     FB.forms.open(box, form, { context: { initiator: FB.profileOf(FB.state.user.id) }, submitLabel: 'Submit request', onCancel: m.close,
-      onSubmit: async (data) => { const r = await api.post(`/flows/${flow.id}/start`, { data }); m.close(); toast('Request sent', 'ok'); FB.refreshBadge && FB.refreshBadge(); FB.go(r.taskId ? '#/task/' + r.taskId : '#/processes/' + r.instanceId); } });
+      onSubmit: async (data) => { const r = await api.post(`/flows/${flow.id}/start`, { data, subject }); m.close(); toast('Request sent', 'ok'); FB.refreshBadge && FB.refreshBadge(); FB.go(r.taskId ? '#/task/' + r.taskId : '#/processes/' + r.instanceId); } });
   };
 
   // ---------------------------------------------------------------- areas

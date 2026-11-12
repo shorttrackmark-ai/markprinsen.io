@@ -182,8 +182,11 @@
         }
         if (n.recordId) { const er = FB.expr.check(n.recordId); if (er) errs.push(`“${n.name}” record id: ${er}`); }
         if (n.type === 'start' && n.title) { const er = FB.expr.check(n.title); if (er) errs.push(`Process title: ${er}`); }
+        if (n.type === 'start' && n.subjectForm && forms && !forms.some(f => Number(f.id) === Number(n.subjectForm) && f.is_class)) errs.push('The class this process works on (at Start) is no longer a class, or no longer exists.');
+        if (n.type === 'task' && n.assignee && n.assignee.type === 'attr' && (!n.assignee.key || n.assignee.value == null || n.assignee.value === '')) errs.push(`Task “${n.name}”: choose the attribute and its value.`);
         if (n.type === 'start' && n.formId && known && !known.has(Number(n.formId))) errs.push('The request form (at Start) no longer exists or is archived.');
         if (n.type === 'start' && n.publicEnabled) {
+          if (n.subjectForm) errs.push('A public web form cannot work on an object: remove the class at Start, or switch the web form off.');
           if (!n.formId) errs.push('A public web form needs a request form: choose one at Start.');
           const pf = forms && n.formId ? forms.find(f => Number(f.id) === Number(n.formId)) : null;
           if (pf && pf.fields.some(f => f.type === 'person' || f.type === 'record' || f.type === 'file')) errs.push('A public web form cannot use Person, Record or File fields (visitors are not signed in).');

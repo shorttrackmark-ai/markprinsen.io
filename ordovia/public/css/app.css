@@ -586,6 +586,12 @@ pre.code { border-radius: 2px; background: var(--surface-2); border: 1px solid v
   .topbar-right { gap: 6px; }
 }
 
+/* objects */
+.class-flag { margin: 0 0 14px; padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--border); }
+.pa-row { grid-template-columns: 1fr 180px auto; }
+.pa-row .pa-options { grid-column: 1 / -1; margin: 0; }
+.pa-row input, .pa-row select { margin: 0; }
+
 /* registers: sortable, ruled lists */
 table.register th.sortable { cursor: pointer; user-select: none; position: relative; padding-right: 24px; }
 table.register th.sortable:hover { background: var(--head); }

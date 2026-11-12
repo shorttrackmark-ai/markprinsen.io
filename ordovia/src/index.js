@@ -200,7 +200,8 @@ route('GET', '/api/meta', async (c) => {
     people: [...D.persons.values()].filter(p => p.active).map(p => ({ id: p.id, name: p.name, tagIds: [...D.tagIdsOf(p.id)] })),
     areas: await all(c.db, 'SELECT id, name, description, color, owner_id FROM areas ORDER BY name'),
     documents: await all(c.db, "SELECT id, name, kind, area_id, status FROM documents WHERE status != 'archived' ORDER BY name"),
-    forms: forms.filter(f => f.status !== 'archived' || c.user.is_admin).map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields, checks: f.checks, area_id: f.area_id, status: f.status, canView: canViewForm(c.user, D, f), canAdd: f.status === 'archived' ? false : canAddForm(c.user, D, f) })),
+    personFields: await personFields(c),
+    forms: forms.filter(f => f.status !== 'archived' || c.user.is_admin).map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields, checks: f.checks, area_id: f.area_id, status: f.status, is_class: !!f.is_class, canView: canViewForm(c.user, D, f), canAdd: f.status === 'archived' ? false : canAddForm(c.user, D, f) })),
     openTasks: (await openTasksFor(c, c.user.id)).length,
   };
 });
@@ -229,7 +230,7 @@ route('GET', '/api/home', async (c) => {
   const flows = (await all(c.db, "SELECT id, name, description, graph, area_id, status FROM flows WHERE status = 'active' OR (status = 'draft' AND ? = 1) ORDER BY name", c.user.is_admin ? 1 : 0)).filter(f => {
     const s = startNode(parse(f.graph, { nodes: [] }));
     return s && tagRule(c.user, D, s.startTags);
-  }).map(f => ({ id: f.id, name: f.name, description: f.description, area_id: f.area_id, status: f.status, form_id: (startNode(parse(f.graph, { nodes: [] })) || {}).formId || null }));
+  }).map(f => ({ id: f.id, name: f.name, description: f.description, area_id: f.area_id, status: f.status, form_id: (startNode(parse(f.graph, { nodes: [] })) || {}).formId || null, subject_form_id: (startNode(parse(f.graph, { nodes: [] })) || {}).subjectForm || null }));
   const mine = await all(c.db, 'SELECT * FROM v_instances WHERE id IN (SELECT id FROM instances WHERE started_by = ?) ORDER BY created_at DESC LIMIT 8', c.user.id);
   return { tasks: await openTasksFor(c, c.user.id), flows, mine };
 });
@@ -238,7 +239,7 @@ route('POST', '/api/flows/:id/start', async (c, { id }) => {
   const flow = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
   if (!flow) throw new HttpError(404, 'Flow not found');
   let b = {}; try { b = (await c.body()) || {}; } catch { /* an empty body is fine */ }
-  return startRun(c, flow, { data: b.data, source: c.viaToken ? 'api' : 'app', ref: b.reference, callback: b.callbackUrl });
+  return startRun(c, flow, { data: b.data, source: c.viaToken ? 'api' : 'app', ref: b.reference, callback: b.callbackUrl, subject: b.subject });
 });
 
 /**
@@ -258,6 +259,21 @@ async function startRun(c, flow, opts) {
   const ref = opts.ref == null || opts.ref === '' ? null : String(opts.ref).slice(0, 120);
   const initiator = opts.source === 'web' ? { name: (opts.requester && opts.requester.name) || 'Web form', email: (opts.requester && opts.requester.email) || '' } : D.profile(c.user.id);
   const vars = { initiator, process: flow.name };
+  // the object this run is about ("calibrate machine 12"): chosen from the class set on the start step
+  let subject = null, subjectForm = null;
+  if (s.subjectForm) {
+    subjectForm = forms.find(f => f.id === Number(s.subjectForm));
+    if (!subjectForm || subjectForm.status === 'archived') throw new HttpError(400, 'This process works on a class that no longer exists.');
+    if (opts.source === 'web') throw new HttpError(400, 'A public web form cannot work on an object.');
+    const sid = Number(opts.subject);
+    if (!Number.isInteger(sid) || sid < 1) throw new HttpError(400, 'Choose the ' + subjectForm.name.toLowerCase() + ' this process is about.');
+    const rec = await first(c.db, 'SELECT id, data, person_id FROM submissions WHERE id = ? AND form_id = ?', sid, subjectForm.id);
+    if (!rec) throw new HttpError(404, 'That ' + subjectForm.name.toLowerCase() + ' does not exist.');
+    if (!(canViewForm(c.user, D, subjectForm) || rec.person_id === c.user.id)) throw new HttpError(403, 'You may not use this ' + subjectForm.name.toLowerCase() + '.');
+    const sdata = parse(rec.data, {});
+    subject = { ...sdata, id: rec.id, label: recordLabel(subjectForm, rec.id, sdata) };
+    vars.subject = subject; vars[subjectForm.slug] = subject;
+  }
   let formRes = null, startForm = null;
   if (s.formId) {
     startForm = forms.find(f => f.id === Number(s.formId));
@@ -265,9 +281,9 @@ async function startRun(c, flow, opts) {
     if (!formRes.ok) throw new HttpError(422, 'Please check the form', { errors: formRes.errors, formErrors: formRes.formErrors });
   }
   const starter = opts.source === 'web' ? null : c.user.id;
-  const iid = await run(c.db, 'INSERT INTO instances(flow_id, flow_version, graph, title, status, vars, started_by, created_at, source, external_ref, callback_url) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-    flow.id, flow.version, flow.graph, flow.name, 'running', JSON.stringify(vars), starter, now(), opts.source || 'app', ref, opts.callback || null);
-  const proc = { id: iid, flowName: flow.name, graph, vars, title: `${flow.name} #${iid}`, status: 'running', started_by: starter, finished_at: null, ref, callback: opts.callback || null };
+  const iid = await run(c.db, 'INSERT INTO instances(flow_id, flow_version, graph, title, status, vars, started_by, created_at, source, external_ref, callback_url, subject_form_id, subject_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    flow.id, flow.version, flow.graph, subject ? flow.name + ' – ' + subject.label : flow.name, 'running', JSON.stringify(vars), starter, now(), opts.source || 'app', ref, opts.callback || null, subjectForm ? subjectForm.id : null, subject ? subject.id : null);
+  const proc = { id: iid, flowName: flow.name, graph, vars, title: subject ? `${flow.name} – ${subject.label}` : `${flow.name} #${iid}`, status: 'running', started_by: starter, finished_at: null, ref, callback: opts.callback || null };
   const tx = new Tx(c.db);
   const io = await runtimeIO(c, tx, proc);
   io.log(opts.source === 'web' ? `Request received from the web form (${initiator.name}${initiator.email ? ', ' + initiator.email : ''})` : opts.source === 'api' ? `Started through the API by ${c.user.name}${ref ? ' (reference ' + ref + ')' : ''}` : `Started by ${c.user.name}`, starter);
@@ -412,7 +428,8 @@ route('GET', '/api/instances/:id', async (c, { id }) => {
     all(c.db, 'SELECT t.id, t.name, t.node_id, t.status, t.assignee, t.due_at, t.completed_at, p.name AS who FROM tasks t LEFT JOIN persons p ON p.id = t.completed_by WHERE instance_id = ? ORDER BY t.id', raw.id),
     all(c.db, 'SELECT message, created_at FROM events WHERE instance_id = ? ORDER BY id', raw.id),
   ]);
-  return { instance: info, graph: parse(raw.graph, { nodes: [], edges: [] }), vars: parse(raw.vars, {}), events,
+  const subject = raw.subject_form_id ? { formId: raw.subject_form_id, id: raw.subject_id, form: ((await c.formsMap()).get(raw.subject_form_id) || {}).name || '', label: (parse(raw.vars, {}).subject || {}).label || ('#' + raw.subject_id) } : null;
+  return { instance: info, subject, graph: parse(raw.graph, { nodes: [], edges: [] }), vars: parse(raw.vars, {}), events,
     tasks: tasks.map(t => ({ ...t, assignee: D.describe(parse(t.assignee, {})) })) };
 });
 
@@ -563,7 +580,7 @@ route('DELETE', '/api/admin/dashboards/:id', async (c, { id }) => {
 route('GET', '/api/admin/forms', async (c) => {
   const counts = Object.fromEntries((await all(c.db, 'SELECT form_id, count(*) AS n FROM submissions GROUP BY form_id')).map(r => [r.form_id, r.n]));
   const flows = (await all(c.db, 'SELECT name, graph, status FROM flows')).map(fl => ({ name: fl.name, status: fl.status, forms: new Set(parse(fl.graph, { nodes: [] }).nodes.map(n => Number(n.formId)).filter(Boolean)) }));
-  return (await c.forms()).map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields.length, records: counts[f.id] || 0, updated_at: f.updated_at, area_id: f.area_id, status: f.status, owner_id: f.owner_id,
+  return (await c.forms()).map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields.length, records: counts[f.id] || 0, updated_at: f.updated_at, area_id: f.area_id, status: f.status, owner_id: f.owner_id, is_class: !!f.is_class,
     usedIn: flows.filter(fl => fl.status !== 'archived' && fl.forms.has(f.id)).length }));
 }, { admin: true });
 route('GET', '/api/admin/forms/:id', async (c, { id }) => {
@@ -588,7 +605,8 @@ route('PUT', '/api/admin/forms/:id', async (c, { id }) => {
   const old = await c.form(id);
   const b = await c.body();
   const form = { ...old, name: String(b.name || old.name).slice(0, 120), description: String(b.description || ''), fields: Array.isArray(b.fields) ? b.fields : [], checks: Array.isArray(b.checks) ? b.checks : [], access: b.access || {},
-    area_id: b.area_id === undefined ? old.area_id : await areaOf(c, b.area_id), status: cleanStatus(b.status, old.status), owner_id: b.owner_id === undefined ? old.owner_id : await personOf(c, b.owner_id) };
+    area_id: b.area_id === undefined ? old.area_id : await areaOf(c, b.area_id), status: cleanStatus(b.status, old.status), owner_id: b.owner_id === undefined ? old.owner_id : await personOf(c, b.owner_id),
+    is_class: b.is_class === undefined ? old.is_class : (b.is_class ? 1 : 0) };
   if (form.status === 'archived' && old.status !== 'archived') {
     const active = (await all(c.db, "SELECT name, graph FROM flows WHERE status = 'active'")).filter(fl => parse(fl.graph, { nodes: [] }).nodes.some(n => Number(n.formId) === form.id));
     if (active.length) throw new HttpError(409, 'This form is used by active process' + (active.length > 1 ? 'es' : '') + ': ' + active.map(a => a.name).join(', ') + '. Change those first.');
@@ -596,8 +614,8 @@ route('PUT', '/api/admin/forms/:id', async (c, { id }) => {
   const problems = FB.logic.lint(form);
   if (problems.length) throw new HttpError(400, problems[0], { problems });
   await c.db.batch([
-    c.db.prepare('UPDATE forms SET name = ?, description = ?, fields = ?, checks = ?, access = ?, area_id = ?, status = ?, owner_id = ?, updated_at = ? WHERE id = ?')
-      .bind(form.name, form.description, JSON.stringify(form.fields), JSON.stringify(form.checks), JSON.stringify(form.access), form.area_id, form.status, form.owner_id, now(), form.id),
+    c.db.prepare('UPDATE forms SET name = ?, description = ?, fields = ?, checks = ?, access = ?, area_id = ?, status = ?, owner_id = ?, is_class = ?, updated_at = ? WHERE id = ?')
+      .bind(form.name, form.description, JSON.stringify(form.fields), JSON.stringify(form.checks), JSON.stringify(form.access), form.area_id, form.status, form.owner_id, form.is_class ? 1 : 0, now(), form.id),
     ...formViewSQL(form).map(s => c.db.prepare(s)),
   ]);
 }, { admin: true });
@@ -700,7 +718,7 @@ route('POST', '/api/admin/flows/:id/restore', async (c, { id }) => {
 // ---------------------------------------------------------------- admin: people & tags
 route('GET', '/api/admin/people', async (c) => {
   const D = await c.dir();
-  return { people: [...D.persons.values()].map(p => ({ ...p, tagIds: [...D.tagIdsOf(p.id)] })), tags: [...D.tags.values()], categories: D.categories() };
+  return { people: [...D.persons.values()].map(p => ({ ...p, attrs: parse(p.attrs, {}), tagIds: [...D.tagIdsOf(p.id)] })), tags: [...D.tags.values()], categories: D.categories(), personFields: await personFields(c) };
 }, { admin: true });
 async function savePerson(c, pid, b) {
   if (c.demo) throw new HttpError(403, 'People cannot be changed in the example.');
@@ -710,6 +728,14 @@ async function savePerson(c, pid, b) {
   if (b.password && String(b.password).length < 8) throw new HttpError(400, 'Use a password of at least 8 characters');
   if (!pid && !b.password) throw new HttpError(400, 'Set a password for the new person');
   if (pid === c.user.id && (!b.is_admin || !b.active)) throw new HttpError(400, 'You cannot remove your own admin rights or deactivate yourself');
+  // attributes (function, employee number, ...): checked against the fields defined for the Person class, in the standard formats
+  let attrs = null;
+  if (b.attrs !== undefined) {
+    const pf = await personFields(c);
+    const res = await finalizeForm(c, personForm(pf), b.attrs || {}, {});
+    if (!res.ok) throw new HttpError(422, 'Please check the attributes', { errors: res.errors, formErrors: res.formErrors });
+    attrs = JSON.stringify(Object.fromEntries(pf.filter(f => res.data[f.key] != null && res.data[f.key] !== '').map(f => [f.key, res.data[f.key]])));
+  }
   const hash = b.password ? await hashPassword(String(b.password)) : null;
   let id = pid;
   if (!pid) id = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at) VALUES (?,?,?,?,?,?)', name, email, hash, b.is_admin ? 1 : 0, b.active === false ? 0 : 1, now());
@@ -718,11 +744,30 @@ async function savePerson(c, pid, b) {
     st.push(c.db.prepare(`UPDATE persons SET name = ?, email = ?, is_admin = ?, active = ?${hash ? ', pw_hash = ?' : ''} WHERE id = ?`).bind(...[name, email, b.is_admin ? 1 : 0, b.active ? 1 : 0].concat(hash ? [hash] : [], [pid])));
     if (hash || !b.active) st.push(c.db.prepare('DELETE FROM sessions WHERE person_id = ? AND ? = 0').bind(pid, pid === c.user.id ? 1 : 0));
   }
+  if (attrs !== null) st.push(c.db.prepare('UPDATE persons SET attrs = ? WHERE id = ?').bind(attrs, id));
   st.push(c.db.prepare('DELETE FROM person_tags WHERE person_id = ?').bind(id));
   for (const tid of (b.tagIds || []).map(Number).filter(Number.isInteger)) st.push(c.db.prepare('INSERT OR IGNORE INTO person_tags(person_id, tag_id) VALUES (?,?)').bind(id, tid));
   await c.db.batch(st);
   return { id };
 }
+// The Person class: which attributes every person has (function, employee number, ...). Same field definitions as forms, without links and files.
+const PERSON_FIELD_TYPES = ['text', 'textarea', 'number', 'email', 'date', 'select', 'radio', 'checkbox'];
+async function personFields(c) { return parse((await c.settings()).person_fields, []); }
+const personForm = (fields) => ({ id: 0, name: 'Person', slug: 'person', fields, checks: [], access: {}, status: 'active' });
+route('PUT', '/api/admin/person-fields', async (c) => {
+  if (c.demo) throw new HttpError(403, 'People cannot be changed in the example.');
+  const b = await c.body();
+  const fields = (Array.isArray(b.fields) ? b.fields : []).slice(0, 30).map(f => ({ ...f, label: String(f.label || '').trim().slice(0, 60), key: String(f.key || slugify(f.label || '')).slice(0, 40) }));
+  for (const f of fields) {
+    if (!PERSON_FIELD_TYPES.includes(f.type)) throw new HttpError(400, 'A person attribute cannot be of type ' + f.type + '.');
+    if (['id', 'name', 'email', 'initiator', 'process', 'subject'].includes(f.key)) throw new HttpError(400, '“' + f.key + '” is reserved: choose another name for ' + f.label + '.');
+  }
+  const problems = FB.logic.lint(personForm(fields));
+  if (problems.length) throw new HttpError(400, problems[0], { problems });
+  await run(c.db, "INSERT INTO settings(key, value) VALUES ('person_fields', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(fields));
+  c.note('Person attributes', fields.map(f => f.label).join(', ') || 'none');
+  return { ok: true };
+}, { admin: true });
 route('POST', '/api/admin/people', async (c) => savePerson(c, null, await c.body()), { admin: true });
 route('PUT', '/api/admin/people/:id', async (c, { id }) => savePerson(c, Number(id), await c.body()), { admin: true });
 route('POST', '/api/admin/tags', async (c) => {
@@ -982,7 +1027,7 @@ route('POST', '/api/v1/processes/:id/start', async (c, { id }) => {
   const flow = await first(c.db, 'SELECT * FROM flows WHERE id = ?', Number(id));
   if (!flow) throw new HttpError(404, 'Process not found');
   let b = {}; try { b = (await c.body()) || {}; } catch { /* empty body */ }
-  const r = await startRun(c, flow, { data: b.data, source: 'api', ref: b.reference, callback: b.callbackUrl });
+  const r = await startRun(c, flow, { data: b.data, source: 'api', ref: b.reference, callback: b.callbackUrl, subject: b.subject });
   return new Response(JSON.stringify({ run: await runView(c, r.instanceId) }), { status: 201, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 });
 async function runView(c, iid) {
@@ -991,7 +1036,7 @@ async function runView(c, iid) {
   if (!(await canSeeInstance(c, raw))) throw new HttpError(403, 'No access to this run');
   const D = await c.dir(), vars = parse(raw.vars, {});
   const [info, tasks] = await Promise.all([first(c.db, 'SELECT * FROM v_instances WHERE id = ?', raw.id), all(c.db, 'SELECT name, status, assignee, due_at, completed_at FROM tasks WHERE instance_id = ? ORDER BY id', raw.id)]);
-  return { id: raw.id, process: info.flow, title: raw.title, status: raw.status, outcome: vars.outcome ?? null, reference: raw.external_ref, source: raw.source, created_at: raw.created_at, finished_at: raw.finished_at,
+  return { id: raw.id, process: info.flow, title: raw.title, subject: raw.subject_id ? { form_id: raw.subject_form_id, id: raw.subject_id, label: (vars.subject || {}).label || null } : null, status: raw.status, outcome: vars.outcome ?? null, reference: raw.external_ref, source: raw.source, created_at: raw.created_at, finished_at: raw.finished_at,
     outputs: publicVars(vars), tasks: tasks.map(t => ({ name: t.name, status: t.status, assignee: D.describe(parse(t.assignee, {})), due_at: t.due_at, completed_at: t.completed_at })), url: c.url.origin + '/#/processes/' + raw.id };
 }
 route('GET', '/api/v1/runs/:id', async (c, { id }) => ({ run: await runView(c, id) }));
@@ -1255,6 +1300,8 @@ route('DELETE', '/api/admin/documents/:id', async (c, { id }) => {
 function unknownVariables(g, forms) {
   const fm = new Map(forms.map(f => [f.id, f]));
   const known = new Set(['initiator', 'process', 'outcome']), objects = new Set(['initiator']);
+  const stNode = g.nodes.find(n => n.type === 'start');
+  if (stNode && stNode.subjectForm && fm.get(Number(stNode.subjectForm))) { known.add('subject'); objects.add('subject'); }
   const addForm = (form) => {
     if (!form) return;
     objects.add(form.slug); known.add(form.slug);
@@ -1262,6 +1309,7 @@ function unknownVariables(g, forms) {
   };
   for (const n of g.nodes) {
     if (n.formId) addForm(fm.get(Number(n.formId)));
+    if (n.type === 'start' && n.subjectForm) addForm(fm.get(Number(n.subjectForm)));
     for (const a of FB.logic.assignments(n.assignments)) known.add(a.name);
     if (n.type === 'record' && n.mode !== 'update' && n.formId && fm.get(Number(n.formId))) known.add(fm.get(Number(n.formId)).slug);
   }
@@ -1285,3 +1333,40 @@ function unknownVariables(g, forms) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- classes and objects
+// A class is a register (form) with is_class = 1; its records are objects: a machine, a vehicle, a supplier. Processes can work on one of them.
+const classOf = async (c, fid) => {
+  const f = (await c.forms()).find(x => x.id === Number(fid));
+  if (!f || !f.is_class || (f.status === 'archived' && !c.user.is_admin)) throw new HttpError(404, 'Class not found');
+  return f;
+};
+route('GET', '/api/objects', async (c) => {
+  const D = await c.dir();
+  const counts = Object.fromEntries((await all(c.db, 'SELECT form_id, count(*) AS n FROM submissions GROUP BY form_id')).map(r => [r.form_id, r.n]));
+  return (await c.forms()).filter(f => f.is_class && (f.status !== 'archived' || c.user.is_admin) && (canViewForm(c.user, D, f) || canAddForm(c.user, D, f)))
+    .map(f => ({ id: f.id, name: f.name, description: f.description, area_id: f.area_id, status: f.status, count: counts[f.id] || 0, canAdd: f.status !== 'archived' && canAddForm(c.user, D, f) }));
+});
+route('GET', '/api/objects/:fid', async (c, { fid }) => {
+  const form = await classOf(c, fid), D = await c.dir();
+  const all_ = canViewForm(c.user, D, form);
+  const rows = await all(c.db, `SELECT id, data, person_id FROM submissions WHERE form_id = ? ${all_ ? '' : 'AND person_id = ' + Number(c.user.id)} ORDER BY id DESC LIMIT 2000`, form.id);
+  return { form, canAdd: form.status !== 'archived' && canAddForm(c.user, D, form), objects: rows.map(r => { const data = parse(r.data, {}); return { id: r.id, label: recordLabel(form, r.id, data), data }; }) };
+});
+route('GET', '/api/objects/:fid/:id', async (c, { fid, id }) => {
+  const form = await classOf(c, fid), D = await c.dir();
+  const rec = await first(c.db, 'SELECT s.*, p.name AS who FROM submissions s LEFT JOIN persons p ON p.id = s.person_id WHERE s.id = ? AND s.form_id = ?', Number(id), form.id);
+  if (!rec) throw new HttpError(404, 'Object not found');
+  if (!canViewForm(c.user, D, form) && rec.person_id !== c.user.id) throw new HttpError(403, 'No access');
+  const data = parse(rec.data, {});
+  const runs = await all(c.db, `SELECT i.id, i.title, i.status, i.created_at, i.finished_at, f.name AS flow, p.name AS started_by FROM instances i JOIN flows f ON f.id = i.flow_id LEFT JOIN persons p ON p.id = i.started_by
+    WHERE i.subject_form_id = ? AND i.subject_id = ? ORDER BY i.id DESC LIMIT 100`, form.id, rec.id);
+  const startable = (await all(c.db, "SELECT id, name, description, graph FROM flows WHERE status = 'active' ORDER BY name")).flatMap(f => {
+    const st = startNode(parse(f.graph, { nodes: [] }));
+    return st && Number(st.subjectForm) === form.id && tagRule(c.user, D, st.startTags) ? [{ id: f.id, name: f.name, description: f.description, form_id: st.formId || null }] : [];
+  });
+  const linking = (await c.forms()).flatMap(f => f.fields.filter(x => x.type === 'record' && Number(x.recordForm) === form.id).map(x => ({ f, key: x.key })));
+  const linkedFrom = [];
+  for (const l of linking) for (const r of await all(c.db, `SELECT id FROM submissions WHERE form_id = ? AND json_extract(data, '$.${l.key}') = ? ORDER BY id DESC LIMIT 50`, l.f.id, rec.id)) linkedFrom.push({ formId: l.f.id, form: l.f.name, id: r.id });
+  return { form, object: { id: rec.id, label: recordLabel(form, rec.id, data), data, created_at: rec.created_at, updated_at: rec.updated_at, who: rec.who }, runs, startable, linkedFrom, canEdit: !!c.user.is_admin };
+});

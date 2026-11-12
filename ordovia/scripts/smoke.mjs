@@ -28,15 +28,15 @@ r = await post('/api/admin/assign-area', { entity: 'form', id: forms[0].id, area
 r = await post('/api/admin/areas/starter'); ok(r.status === 409, 'starter areas only on an empty workspace');
 
 console.log('handbook, home');
-r = await get('/api/handbook'); ok(r.data.length === 3 && r.data[0].owner && r.data[0].reviewDue, 'handbook has owner and review date', r.data[0]);
+r = await get('/api/handbook'); ok(r.data.length === 4 && r.data[0].owner && r.data[0].reviewDue, 'handbook has owner and review date', r.data[0]);
 const flowId = r.data.find(f => f.name === 'Leave request').id;
-r = await get('/api/home'); ok(r.data.flows.length === 3 && r.data.flows[0].area_id, 'home lists active processes with area');
+r = await get('/api/home'); ok(r.data.flows.length === 4 && r.data.flows[0].area_id, 'home lists active processes with area');
 
 console.log('lifecycle');
 r = await del('/api/admin/forms/' + forms[0].id); ok(r.status === 409, 'a form cannot be deleted before it is archived', r.data);
 r = await get('/api/admin/flows/' + flowId); const flow = r.data;
 r = await put('/api/admin/flows/' + flowId, { name: flow.name, description: flow.description, graph: flow.graph, doc: flow.doc, status: 'archived' }); ok(r.status === 200 && r.data.status === 'archived', 'archive a process', r.data);
-r = await get('/api/home'); ok(r.data.flows.length === 2, 'archived process is gone from Start a process');
+r = await get('/api/home'); ok(r.data.flows.length === 3, 'archived process is gone from Start a process');
 r = await post('/api/flows/' + flowId + '/start'); ok(r.status === 409, 'archived process cannot be started', r.data);
 r = await put('/api/admin/flows/' + flowId, { name: flow.name, description: flow.description, graph: flow.graph, doc: flow.doc, status: 'active' }); ok(r.status === 200 && r.data.status === 'active', 'reactivate it', r.data);
 // an active process with a broken graph falls back to draft
@@ -163,6 +163,46 @@ console.log('notification format');
   r = await put('/api/admin/settings', { notify_format: 'word' }); ok(r.status === 400, 'only known notification formats');
   r = await put('/api/admin/settings', { notify_format: 'teams' }); ok(r.status === 200, 'choose the Teams card format'); r = await get('/api/admin/settings'); ok(r.data.notify_format === 'teams', 'the choice is kept');
   await put('/api/admin/settings', { notify_format: 'json' });
+}
+
+console.log('classes, objects, person attributes');
+{
+  const adminCookie = cookie;
+  r = await get('/api/objects'); const machine = r.data.find(o => o.name === 'Machine'); ok(machine && machine.count === 6, 'the Machine class has its six objects', r.data);
+  r = await get('/api/objects/' + machine.id); const m5 = r.data.objects.find(o => o.data.machine_id === 'M-005'); ok(r.data.objects.length === 6 && m5 && m5.label === 'Pallet scale', 'a class lists its objects with a label');
+  r = await get('/api/objects/' + machine.id + '/' + m5.id); ok(r.data.runs.length === 1 && r.data.runs[0].status === 'running' && r.data.startable.some(f => f.name === 'Machine calibration'), 'an object shows its runs and the processes that work on it', r.data);
+  const calib = r.data.startable.find(f => f.name === 'Machine calibration');
+  r = await get('/api/objects/' + flowId); ok(r.status === 404, 'a plain form is not a class');
+  r = await post('/api/flows/' + calib.id + '/start', {}); ok(r.status === 400, 'a process on an object needs the object', r.data);
+  r = await post('/api/flows/' + calib.id + '/start', { subject: 999999 }); ok(r.status === 404, 'an unknown object is refused');
+  r = await post('/api/flows/' + calib.id + '/start', { subject: m5.id }); ok(r.status === 200 && r.data.instanceId, 'start a calibration on machine M-005', r.data); const iid = r.data.instanceId;
+  r = await get('/api/instances/' + iid); ok(r.data.subject && r.data.subject.label === 'Pallet scale' && r.data.vars.subject.machine_id === 'M-005' && /Pallet scale/.test(r.data.instance.title), 'the run knows its subject', r.data.subject);
+
+  // attributes decide who gets the task: job title = Metrologist
+  r = await get('/api/admin/people'); ok(r.data.personFields.some(f => f.key === 'job_title') && r.data.people.every(p => typeof p.attrs === 'object'), 'person attributes are defined and returned');
+  const bramP = r.data.people.find(p => p.email === 'bram@example.com');
+  const login = async (email) => { cookie = ''; r = await post('/api/login', { email, password: 'demo1234' }); return r.status === 200; };
+  const calibTasks = async () => (await get('/api/home')).data.tasks.filter(t => t.name === 'Calibrate' && t.instance_id === iid);
+  await login('bram@example.com'); ok((await calibTasks()).length === 0, 'a salesperson does not get the calibration task');
+  await login('carla@example.com'); const mine = await calibTasks(); ok(mine.length === 1, 'the metrologist gets it (assigned by attribute)', mine);
+  r = await post('/api/tasks/' + mine[0].id + '/complete', { data: { result: 'Out of tolerance' } }); ok(r.status === 422, 'the calibration form checks its input (remarks needed when out of tolerance)', r.data);
+  const today = new Date().toISOString().slice(0, 10);
+  r = await post('/api/tasks/' + mine[0].id + '/complete', { data: { measured_on: today, result: 'Within tolerance', deviation: 0.2 } }); ok(r.status === 200, 'the metrologist completes the calibration', r.data);
+  cookie = adminCookie;
+  r = await get('/api/objects/' + machine.id + '/' + m5.id); const md = r.data.object.data;
+  ok(md.status === 'In service' && md.last_calibrated === today && (Date.parse(md.next_due) - Date.parse(md.last_calibrated)) / 86400000 === Number(md.interval_days), 'the process wrote the result back to the machine (dates and status)', md);
+  ok(r.data.runs.some(x => x.id === iid && x.status === 'done'), 'the finished run stays on the object');
+
+  // changing an attribute changes who receives tasks
+  r = await put('/api/admin/people/' + bramP.id, { name: bramP.name, email: bramP.email, is_admin: !!bramP.is_admin, active: true, tagIds: bramP.tagIds, attrs: { job_title: 'Astronaut' } }); ok(r.status === 422, 'an attribute outside its options is refused', r.data);
+  r = await put('/api/admin/people/' + bramP.id, { name: bramP.name, email: bramP.email, is_admin: !!bramP.is_admin, active: true, tagIds: bramP.tagIds, attrs: { job_title: 'Metrologist', employee_no: 'e-2001' } }); ok(r.status === 200, 'set an attribute on a person', r.data);
+  r = await get('/api/admin/people'); ok(r.data.people.find(p => p.id === bramP.id).attrs.employee_no === 'E-2001', 'attributes use the standard format (E-2001)');
+  r = await put('/api/admin/person-fields', { fields: [{ label: 'Photo', type: 'file' }] }); ok(r.status === 400, 'a person attribute cannot be a file or a link (yet)');
+  r = await put('/api/admin/person-fields', { fields: [{ label: 'Name', type: 'text' }] }); ok(r.status === 400, 'reserved attribute names are refused');
+  // a process on an object cannot be a public web form
+  { const fl = (await get('/api/admin/flows/' + calib.id)).data; const st = fl.graph.nodes.find(n => n.type === 'start'); st.publicEnabled = true;
+    r = await put('/api/admin/flows/' + calib.id, { name: fl.name, description: fl.description, graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 200 && r.data.status === 'draft', 'an active process that also works on an object and is public is set back to draft', r.data); }
+  r = await get('/api/admin/health'); ok(!r.data.items.some(i => /“subject/.test(i.title)), 'no false alarm about the subject variable');
 }
 
 console.log('as a colleague');

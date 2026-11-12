@@ -66,7 +66,7 @@ export function readCookie(req, name) {
 // ---------- directory: people, tags and assignment rules ----------
 export async function loadDirectory(db) {
   const [p, t, pt] = await db.batch([
-    db.prepare('SELECT id, name, email, is_admin, active FROM persons ORDER BY name'),
+    db.prepare('SELECT id, name, email, is_admin, active, attrs FROM persons ORDER BY name'),
     db.prepare('SELECT * FROM tags ORDER BY category, value'),
     db.prepare('SELECT person_id, tag_id FROM person_tags'),
   ]);
@@ -88,6 +88,9 @@ export function makeDirectory(personRows, tagRows, ptRows) {
       const p = persons.get(Number(pid)); if (!p) return {};
       const out = { id: p.id, name: p.name, email: p.email };
       for (const tg of D.tagsOf(p.id)) { const k = slugify(tg.category); out[k] = out[k] == null ? tg.value : [].concat(out[k], tg.value); }
+      // the person's own attributes (function, employee number, ...) win over a tag category of the same name
+      const at = typeof p.attrs === 'string' ? parse(p.attrs, {}) : (p.attrs || {});
+      for (const [k, v] of Object.entries(at)) if (!['id', 'name', 'email'].includes(k) && v !== '' && v != null) out[k] = v;
       return out;
     },
     hasTags: (pid, tagIds) => (tagIds || []).every(id => D.tagIdsOf(pid).has(Number(id))),
@@ -108,6 +111,10 @@ export function makeDirectory(personRows, tagRows, ptRows) {
           }
           return true;
         }
+        case 'attr': {   // a person whose attribute has a given value (e.g. function = Metrologist)
+          const v = D.profile(pid)[rule.key], want = String(rule.value ?? '').toLowerCase();
+          return Array.isArray(v) ? v.some(x => String(x).toLowerCase() === want) : String(v ?? '').toLowerCase() === want;
+        }
         default: return true;
       }
     },
@@ -117,6 +124,7 @@ export function makeDirectory(personRows, tagRows, ptRows) {
         case 'initiator': return 'The person who started the process';
         case 'person': return (persons.get(Number(rule.personId)) || { name: 'Unknown person' }).name;
         case 'field': return `Person chosen in “${rule.field}”`;
+        case 'attr': return `${rule.label || rule.key}: ${rule.value}`;
         case 'tags': {
           const parts = (rule.tagIds || []).map(id => { const x = tags.get(Number(id)); return x ? `${x.category}: ${x.value}` : '?'; });
           return parts.concat((rule.sameAs || []).map(c => `same ${c} as initiator`)).join(' + ') || 'Anyone';
