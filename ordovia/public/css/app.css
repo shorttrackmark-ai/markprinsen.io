@@ -685,3 +685,8 @@ table.register td a:hover { text-decoration: underline; }
 .bar-cell { width: 34%; min-width: 120px; }
 .hb-bar.neg { background: var(--danger); }
 .bar-cell .hb-track { display: block; }
+
+/* transparency */
+.who-link { display: flex; align-items: center; gap: 8px; color: inherit; text-decoration: none !important; }
+.who-link:hover .who-name { text-decoration: underline; }
+.plain-list { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 4px; }

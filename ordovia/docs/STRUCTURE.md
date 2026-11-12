@@ -84,3 +84,8 @@ A link can point outside Ordovia (link type `url`, migration 0009; https only): 
 
 ## Process insight (built)
 Handbook › a process › Performance (process owner or administrator; `GET /api/flows/:id/insight`): cases, typical time to finish (median, 9 in 10), where cases wait (average wait per step, slowest first, open and late counts), how cases end (outcomes, rejected highlighted), cases per month, share of late steps. Deliberately per process, not general BI: it is what only Ordovia knows.
+
+## Transparency: what Ordovia knows about me (built)
+Click your name in the top bar: `/me` (`GET /api/me/data`) lists everything linked to you: profile, tags and attributes, tasks done and waiting, cases started, information entered (with content in the download), files, documents and processes you own, sign-ins, API tokens, and changes made as a builder; with the reason for each and the promise that Ordovia records what is *done* in a process, nothing else (no reading, no typing speed, no activity outside processes, no scoring or ranking). One-click JSON download. Only your own data is included.
+
+Core principle: a form is both the process step and the information (completing the step is entering the data), so data entry is never extra work and the data is the shared single source.

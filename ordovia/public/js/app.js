@@ -37,7 +37,7 @@
       ${link('#/admin/sql', '⌘', 'SQL console')}
       ${link('#/admin/settings', '⚙', 'Settings')}</div>` : ''}`;
     if (FB.isAdmin() && FB.loadHealthCount) FB.loadHealthCount();
-    $('#who').innerHTML = `<span class="avatar">${esc(u.name.split(' ').map(s => s[0]).slice(0, 2).join(''))}</span><span class="who-name">${esc(u.name)}</span>`;
+    $('#who').innerHTML = `<a class="who-link" href="#/me" title="What Ordovia knows about you"><span class="avatar">${esc(u.name.split(' ').map(s => s[0]).slice(0, 2).join(''))}</span><span class="who-name">${esc(u.name)}</span></a>`;
     const dc = $('#demoCtl');
     if (dc && FB.state.settings.demoSite) {
       dc.innerHTML = `<span class="demo-pill" title="The example resets every night and sends nothing anywhere">Example</span><select id="demoWho" aria-label="Look through someone else's eyes">${PERSONAS.map(([k, l]) => `<option value="${k}" ${(k === 'admin' ? 'demo@example.com' : k + '@example.com') === u.email ? 'selected' : ''}>${esc(l.split(' – ')[0])}</option>`).join('')}</select><button class="btn small ghost" id="demoReset" title="Throw away all changes and start fresh">Reset</button><button class="btn small" id="demoLeave" title="Back to your own workspace">Exit example</button>`;

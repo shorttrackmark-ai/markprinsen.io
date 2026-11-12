@@ -1726,3 +1726,36 @@ route('GET', '/api/flows/:id/insight', async (c, { id }) => {
     outcomes: [...outcomes.entries()].map(([name, n]) => ({ name, n, pct: Math.round(100 * n / Math.max(1, done.length)) })).sort((a, b) => b.n - a.n),
     months, steps: stepList, lateRate: totalTasks ? Math.round(100 * lateTasks / totalTasks) : 0, based: done.length };
 });
+
+// ---------------------------------------------------------------- transparency: what Ordovia has recorded about you (and nobody else's data)
+route('GET', '/api/me/data', async (c) => {
+  const D = await c.dir(), me = c.user.id, lim = 500;
+  const p = await first(c.db, 'SELECT id, name, email, is_admin, active, created_at, attrs, deputy_id, away_until FROM persons WHERE id = ?', me);
+  const forms = await c.formsMap();
+  const [done, open, started, records, files, docs, procs, events, audit, tokens, sessions] = await Promise.all([
+    all(c.db, 'SELECT t.id, t.name, t.completed_at, i.id AS case_id, i.title AS case_title FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE t.completed_by = ? ORDER BY t.id DESC LIMIT ?', me, lim),
+    all(c.db, "SELECT t.id, t.name, t.assignee, t.instance_id FROM tasks t WHERE t.status = 'open' LIMIT 2000"),
+    all(c.db, 'SELECT id, title, status, created_at FROM instances WHERE started_by = ? ORDER BY id DESC LIMIT ?', me, lim),
+    all(c.db, 'SELECT id, form_id, instance_id, created_at, data FROM submissions WHERE person_id = ? ORDER BY id DESC LIMIT ?', me, lim),
+    all(c.db, 'SELECT id, name, size, created_at FROM files WHERE uploaded_by = ? ORDER BY id DESC LIMIT ?', me, lim),
+    all(c.db, 'SELECT id, name, kind, status FROM documents WHERE owner_id = ?', me),
+    all(c.db, 'SELECT id, name, status FROM flows WHERE owner_id = ?', me),
+    all(c.db, 'SELECT e.message, e.created_at, e.instance_id FROM events e WHERE e.person_id = ? ORDER BY e.id DESC LIMIT ?', me, lim),
+    all(c.db, 'SELECT at, action, entity, name, detail FROM audit WHERE person_id = ? ORDER BY id DESC LIMIT ?', me, lim),
+    all(c.db, 'SELECT name, created_at, last_used_at, revoked_at FROM api_tokens WHERE person_id = ?', me),
+    first(c.db, 'SELECT count(*) AS n FROM sessions WHERE person_id = ? AND expires_at > ?', me, now()),
+  ]);
+  const mine = open.filter(t => D.matches(me, parse(t.assignee, {}), { id: t.instance_id, started_by: null, vars: '{}' })).length;
+  return {
+    about: 'Everything Ordovia has recorded that is linked to you. It is used for the timeline and the record of each case (who did what, when), for your tasks, and for access control. Ordovia does not track anything outside processes, does not score or rank people, and does not record what you read.',
+    person: { name: p.name, email: p.email, administrator: !!p.is_admin, active: !!p.active, since: p.created_at, tags: D.tagsOf(me).map(t => t.category + ': ' + t.value), attributes: parse(p.attrs, {}), deputy: p.deputy_id ? (D.persons.get(p.deputy_id) || {}).name || null : null, away_until: p.away_until || null },
+    sign_ins: { active: sessions ? sessions.n : 0 },
+    tasks: { completed: done, waiting_for_you: mine },
+    cases_started: started,
+    information_entered: records.map(r => ({ id: r.id, form: (forms.get(r.form_id) || {}).name || '(form removed)', case_id: r.instance_id, entered: r.created_at, data: parse(r.data, {}) })),
+    files_uploaded: files, documents_you_own: docs, processes_you_own: procs,
+    case_timeline_entries: events,
+    changes_made_by_you_as_builder: audit,
+    api_tokens_acting_as_you: tokens,
+  };
+});

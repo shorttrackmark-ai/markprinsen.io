@@ -392,6 +392,21 @@ console.log('process insight');
   r = await get('/api/flows/999999/insight'); ok(r.status === 404, 'unknown process');
 }
 
+console.log('transparency: what Ordovia knows about me');
+{
+  const adminCookie = cookie;
+  cookie = ''; r = await get('/api/me/data'); ok(r.status === 401, 'you must be signed in');
+  r = await post('/api/login', { email: 'carla@example.com', password: 'demo1234' });
+  r = await get('/api/me/data'); const me = r.data;
+  ok(r.status === 200 && me.person.email === 'carla@example.com' && me.person.tags.length > 0 && /does not track|not track/i.test(me.about), 'you see your own profile and the promise', me.person);
+  ok(me.tasks.completed.length > 0 && me.cases_started.length > 0 && me.information_entered.length > 0, 'and what you did: tasks, cases, information entered');
+  ok(me.information_entered.every(x => x.form && x.data) && me.cases_started.every(x => x.id), 'with the content, so it can be downloaded');
+  const bramData = JSON.stringify(me);
+  ok(!bramData.includes('anna@example.com') && !bramData.includes('pw_hash'), 'no one else\'s e-mail address and no password material');
+  r = await post('/api/login', { email: 'eva@example.com', password: 'demo1234' }); r = await get('/api/me/data'); ok(r.data.person.email === 'eva@example.com' && r.data.processes_you_own.length >= 1, 'every person gets their own (Eva owns a process)');
+  cookie = adminCookie;
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');
