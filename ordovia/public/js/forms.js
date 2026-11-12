@@ -45,14 +45,17 @@
     const ro = !!opts.readOnly;
     const root = el('<form class="fb-form" novalidate></form>');
 
+    const taken = new Set();   // fields filled in from an earlier step (enter once)
     for (const f of fields) {
-      if (raw[f.key] === undefined && f.default && f.type !== 'calc') raw[f.key] = FB.expr.safe(f.default, { ...context, ...raw });
+      const pf = opts.prefill && opts.prefill[f.key];
+      if (pf && raw[f.key] === undefined && f.type !== 'calc' && f.type !== 'heading') { raw[f.key] = pf.value; taken.add(f.key); if (pf.label !== undefined) raw[f.key + '_label'] = pf.label; }
+      else if (raw[f.key] === undefined && f.default && f.type !== 'calc') raw[f.key] = FB.expr.safe(f.default, { ...context, ...raw });
     }
 
     function fieldHTML(f, i) {
       const id = `ff_${i}_${f.key}`, v = raw[f.key], dis = ro ? 'disabled' : '';
       const req = f.required ? '<span class="req" title="Required">*</span>' : '';
-      const help = f.help ? `<div class="help">${esc(f.help)}</div>` : '';
+      const help = (f.help ? `<div class="help">${esc(f.help)}</div>` : '') + (taken.has(f.key) ? `<div class="help prefilled">Taken over from “${esc(opts.prefill[f.key].from)}”. Change it if it is not right.</div>` : '');
       const attr = (k, x) => (x !== '' && x != null ? `${k}="${esc(x)}"` : '');
       let input;
       switch (f.type) {
@@ -324,6 +327,7 @@
         ${['text', 'textarea', 'number', 'email', 'date', 'select', 'radio', 'person', 'record'].includes(f.type) ? `<label>Validation rule <small class="muted">(formula, must be true)</small><input data-p="validate" class="mono" value="${esc(f.validate || '')}" placeholder="e.g. end_date >= start_date"></label>
           <label>Validation message<input data-p="validateMsg" value="${esc(f.validateMsg || '')}"></label>` : ''}
         <label>Help text<input data-p="help" value="${esc(f.help || '')}"></label>
+        ${!['heading', 'calc', 'file'].includes(f.type) ? `<label>Take over from earlier steps <small class="muted">(enter information once)</small><select data-p="prefill"><option value="" ${f.prefill == null ? 'selected' : ''}>Automatic: when an earlier step has the same field</option><option value="yes" ${f.prefill === true ? 'selected' : ''}>Always, when an earlier step has it</option><option value="no" ${f.prefill === false ? 'selected' : ''}>Never: this is a new answer each time</option></select></label>` : ''}
         <div class="err" id="exprErr"></div>
         <div class="hint">Names: ${names.map(k => `<code>${esc(k)}</code>`).join(' ') || '–'}<br>Functions: ${FB.expr.functions.map(n => `<code>${n}</code>`).join(' ')}</div></div>`;
 
@@ -338,6 +342,7 @@
           else if (p === 'personTags') v = [...inp.selectedOptions].map(o => Number(o.value));
           else if (p === 'recordForm') v = inp.value ? Number(inp.value) : null;
           else if (p === 'key') v = inp.value.trim();
+          else if (p === 'prefill') v = inp.value === 'yes' ? true : inp.value === 'no' ? false : undefined;
           f[p] = v;
           if (p === 'type' && (v === 'select' || v === 'radio') && !f.options) f.options = ['Option A', 'Option B'];
           if (p === 'type' || p === 'recordForm') drawProps();

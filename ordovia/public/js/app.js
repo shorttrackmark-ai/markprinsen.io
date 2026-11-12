@@ -192,7 +192,19 @@
     };
     if (!form) { box.innerHTML = '<p>This task has no form.</p><button class="btn primary" id="done">Mark as done</button>'; $('#done', box).onclick = () => complete({}).catch(e => toast(e.message, 'error')); return; }
     if (form.description) box.insertAdjacentHTML('beforeend', `<p class="muted">${esc(form.description)}</p>`);
-    await FB.forms.open(box, form, { context: d.vars, submitLabel: 'Complete task', onSubmit: complete });
+    // enter once: simple fields (text, number, date, e-mail, choices, people, records) that an earlier step of this case already filled in come across;
+    // yes/no and radio answers and long text stay empty unless the builder says "always". Later answers win.
+    const SIMPLE = ['text', 'number', 'date', 'email', 'select', 'person', 'record'];
+    const prefill = {};
+    for (const s of d.previous) {
+      const pf = formById(s.form_id); if (!pf) continue;
+      for (const f of form.fields) {
+        if (f.prefill === false || (f.prefill !== true && !SIMPLE.includes(f.type))) continue;
+        const src = pf.fields.find(x => x.key === f.key && x.type === f.type), v = s.data[f.key];
+        if (src && v != null && v !== '') prefill[f.key] = { value: v, label: s.data[f.key + '_label'], from: s.task_name || pf.name };
+      }
+    }
+    await FB.forms.open(box, form, { context: d.vars, prefill, submitLabel: 'Complete task', onSubmit: complete });
     if (d.afterwards) box.insertAdjacentHTML('beforeend', `<p class="muted small next-hint">${esc(d.afterwards)}</p>`);
   });
 

@@ -677,6 +677,8 @@ table.register td a:hover { text-decoration: underline; }
 .away-note { margin: 4px 0 0; padding: 4px 8px; background: var(--surface-2); border-left: 3px solid var(--warn); }
 .escalated { border-left-color: var(--danger); }
 
+.help.prefilled { color: var(--primary); }
+
 /* process insight */
 .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 8px; }
 .kpi-card { padding: 10px 14px; }
