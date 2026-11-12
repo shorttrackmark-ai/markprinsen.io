@@ -186,7 +186,9 @@
         if (n.type === 'record' && !n.formId) errs.push(`Record step “${n.name}” has no form.`);
         if (n.type === 'record' && n.mode === 'update' && !n.recordId) errs.push(`Record step “${n.name}” needs the id of the record to update.`);
         if (n.type === 'webhook' && !/^https:\/\//.test(n.url || '')) errs.push(`Webhook “${n.name}” needs an https:// address.`);
-        if (out.length > 1 && !out.some(e => !e.condition)) errs.push(`“${n.name}” needs one arrow without condition (the “otherwise” path).`);
+        if (out.length > 1 && !out.some(e => !e.condition)) errs.push(`“${n.name}” needs one arrow without a rule (the “otherwise” path): if no rule is true the case would get stuck.`);
+        if (out.filter(e => !e.condition).length > 1) errs.push(`“${n.name}” has ${out.filter(e => !e.condition).length} arrows without a rule, but only one can be the “otherwise” path. Give the others a rule.`);
+        if (out.length === 1 && out[0].condition) errs.push(`“${n.name}” only continues when its rule is true. Add an arrow without a rule for all other cases, or remove the rule.`);
         for (const prop of ['assignments', 'mapping']) {
           for (const a of this.assignments(n[prop])) { const er = FB.expr.check(a.expr); if (er) errs.push(`“${n.name}”: ${a.name} – ${er}`); }
         }
@@ -210,6 +212,17 @@
       for (const e of g.edges) {
         if (!ids.has(e.from) || !ids.has(e.to)) errs.push('An arrow points to a removed step.');
         if (e.condition) { const er = FB.expr.check(e.condition); if (er) errs.push(`Arrow “${e.label || e.condition}”: ${er}`); }
+      }
+      // the route as a whole: everything must be connected to Start, and from everywhere there must be a way to an End
+      const starts = g.nodes.filter(n => n.type === 'start');
+      if (starts.length === 1) {
+        const walk = (from, next) => { const seen = new Set(from), stack = [...from]; while (stack.length) { const id = stack.pop(); for (const nx of next(id)) if (!seen.has(nx)) { seen.add(nx); stack.push(nx); } } return seen; };
+        const forward = walk([starts[0].id], (id) => g.edges.filter(e => e.from === id && ids.has(e.to)).map(e => e.to));
+        const finishes = walk(g.nodes.filter(n => n.type === 'end').map(n => n.id), (id) => g.edges.filter(e => e.to === id && ids.has(e.from)).map(e => e.from));
+        for (const n of g.nodes) {
+          if (n.type !== 'start' && !forward.has(n.id) && g.edges.some(e => e.to === n.id)) errs.push(`“${n.name}” can never be reached from Start: it is only connected to steps that are cut off.`);
+          if (forward.has(n.id) && n.type !== 'end' && !finishes.has(n.id) && g.nodes.some(x => x.type === 'end')) errs.push(`From “${n.name}” the process can never finish: no path leads to an End (it would go round in circles).`);
+        }
       }
       return errs;
     },
