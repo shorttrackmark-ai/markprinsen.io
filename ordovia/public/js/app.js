@@ -149,7 +149,7 @@
         <div class="right small">${t.due_at ? `<span class="${t.overdue ? 'danger-text' : 'muted'}">${esc(dueText(t.due_at))}</span>` : `<span class="muted">${esc(fmtDate(t.created_at))}</span>`}</div></a>`).join('')}</div>`
         : '<div class="empty-state card"><p>All done. New tasks show up here the moment a process needs you.</p></div>'}</section>
       <section><h2>Start a process</h2>${h.flows.length > 6 ? '<div class="filters"><input type="search" id="stQ" placeholder="Find a process…"></div>' : ''}<div id="stList"></div></section>
-      <section><h2>Your recent cases</h2>${h.mine.length ? table({ columns: ['Case', 'Status', 'Outcome', 'Started'], values: h.mine.map(i => [i.title, i.status, i.outcome, fmtDate(i.created_at)]) }, { rowAttr: (r, i) => `data-href="#/processes/${h.mine[i].id}" class="clickable"` }) : '<p class="muted">None yet.</p>'}</section></div>`;
+      <section><h2>Your recent cases</h2><div id="mineList"></div></section></div>`;
     const drawStart = (q) => {
       const shown = h.flows.filter(f => !q || (f.name + ' ' + (f.description || '')).toLowerCase().includes(q.toLowerCase()));
       $('#stList', main).innerHTML = FB.org.group(shown, f => f.area_id).map(g => `<div class="start-area">${g.area ? `<div class="start-area-head"><a href="#/area/${g.area.id}">${FB.org.chip(g.area.id)}</a></div>` : ''}<div class="start-grid">${g.items.map(f => `<button class="card start-card" data-start="${f.id}"><b>${esc(f.name)} ${FB.org.status(f.status)}</b><span class="muted small">${esc(f.description || '')}</span></button>`).join('')}</div></div>`).join('') || (q ? '<p class="muted">No process matches.</p>' : '<p class="muted">No process to start yet.</p>');
@@ -158,6 +158,11 @@
     drawStart('');
     $('#awayBtn', main).onclick = () => FB.awayModal();
     const stq = $('#stQ', main); if (stq) stq.oninput = () => drawStart(stq.value);
+    FB.org.register($('#mineList', main), h.mine, [
+      { label: 'Case', cell: c => `<a href="#/processes/${c.id}"><b>${esc(c.title)}</b></a>`, sort: c => c.title.toLowerCase() },
+      { label: 'Status', cell: c => `<span class="status s-${esc(c.status)}">${esc(c.status)}</span>${c.outcome ? ' ' + esc(c.outcome) : ''}`, sort: c => c.status },
+      { label: 'Started', cell: c => esc(fmtDate(c.created_at).slice(0, 10)), sort: c => c.created_at },
+    ], { href: c => '#/processes/' + c.id, empty: 'None yet.', one: 'case', many: 'cases' });
     const gsA = $('#gsAreas', main); if (gsA) gsA.onclick = async () => { try { await api.post('/admin/areas/starter'); await FB.loadMeta(); toast('Departments added', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); } };
     clickableRows(main);
   });
