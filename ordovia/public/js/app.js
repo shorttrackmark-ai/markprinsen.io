@@ -184,9 +184,15 @@
       <div id="hbFilters"></div><div id="hbList"></div></div>`;
     const draw = () => {
       const shown = list.filter(f => FB.org.match(f, st, [f.name, f.description, f.doc.purpose, f.owner].join(' ')));
-      $('#hbList', main).innerHTML = FB.org.groupedCards(shown, f => f.area_id, f => `<a class="card link-card" href="#/handbook/${f.id}"><h3>${esc(f.name)} ${FB.org.status(f.status)}</h3>
-        <p class="small">${esc(f.doc.purpose || f.description || '')}</p>
-        <p class="muted small">${f.owner ? `Owner: ${esc(f.owner)} · ` : ''}${f.steps} task step${f.steps === 1 ? '' : 's'} · v${f.version}${f.overdue ? ' · <span class="warn-text">review due</span>' : ''}</p></a>`, 'No processes match.');
+      FB.org.register($('#hbList', main), shown, [
+        { label: 'Process', cell: f => `<a href="#/handbook/${f.id}"><b>${esc(f.name)}</b></a> ${FB.org.status(f.status)}`, sort: f => f.name.toLowerCase() },
+        { label: 'Area', cell: FB.org.cell.areaChip, sort: f => FB.org.areaName(f.area_id) },
+        { label: 'Purpose', cell: f => `<span class="clip">${esc(f.doc.purpose || f.description || '')}</span>`, cls: 'wide', sort: f => f.doc.purpose || f.description || '' },
+        { label: 'Owner', cell: FB.org.cell.person, sort: f => f.owner || '' },
+        { label: 'Steps', cell: f => f.steps, sort: f => f.steps, cls: 'num' },
+        { label: 'Version', cell: f => 'v' + f.version, sort: f => f.version, cls: 'num' },
+        { label: 'Next review', cell: FB.org.cell.review, sort: f => f.reviewDue || '9999' },
+      ], { href: f => '#/handbook/' + f.id, empty: 'No processes match.', one: 'process', many: 'processes', total: list.length });
     };
     FB.org.filters($('#hbFilters', main), st, { status: FB.isAdmin(), placeholder: 'Search processes…' }, draw);
     draw();
@@ -231,9 +237,13 @@
     main.innerHTML = `<div class="page"><div class="page-head"><h1>Data</h1></div><div id="dtFilters"></div><div id="dtList"></div></div>`;
     const draw = () => {
       const shown = forms.filter(f => FB.org.match(f, st, f.name + ' ' + (f.description || '')));
-      $('#dtList', main).innerHTML = FB.org.groupedCards(shown, f => f.area_id, f => `<a class="card link-card" href="#/data/${f.id}"><h3>${esc(f.name)} ${FB.org.status(f.status)}</h3>
-        ${f.description ? `<p class="small">${esc(f.description)}</p>` : ''}
-        <p class="muted small">${f.canView ? 'All records' : 'Your records'}${f.canAdd ? ' · you can add records' : ''}</p></a>`, 'No forms match.');
+      FB.org.register($('#dtList', main), shown, [
+        { label: 'Register', cell: f => `<a href="#/data/${f.id}"><b>${esc(f.name)}</b></a> ${FB.org.status(f.status)}`, sort: f => f.name.toLowerCase() },
+        { label: 'Area', cell: FB.org.cell.areaChip, sort: f => FB.org.areaName(f.area_id) },
+        { label: 'Description', cell: f => `<span class="clip">${esc(f.description || '')}</span>`, cls: 'wide', sort: f => f.description || '' },
+        { label: 'You can see', cell: f => (f.canView ? 'All records' : 'Your records'), sort: f => (f.canView ? 0 : 1) },
+        { label: 'You can add', cell: f => (f.canAdd ? 'Yes' : '–'), sort: f => (f.canAdd ? 0 : 1) },
+      ], { href: f => '#/data/' + f.id, empty: 'No forms match.', one: 'register', many: 'registers', total: forms.length });
     };
     FB.org.filters($('#dtFilters', main), st, { status: FB.isAdmin(), placeholder: 'Search data…' }, draw);
     draw();
@@ -314,21 +324,28 @@
     const flows = await api.get('/admin/flows');
     const st = { q: '', area: '', status: 'live' };
     main.innerHTML = `<div class="page"><div class="page-head"><h1>Flows</h1><div class="actions"><button class="btn primary" id="nf">+ New flow</button></div></div><div id="flFilters"></div><div id="flList"></div></div>`;
-    const card = (f) => `<div class="card link-card"><a href="#/admin/flows/${f.id}"><h3>${esc(f.name)} ${FB.org.status(f.status)}</h3></a><p class="muted small">${esc(f.description || '')}</p>
-        <p class="small">${f.steps} steps · v${f.version} · ${f.runs} runs (${f.running || 0} running) ${f.issues ? `<span class="warn-text">· ${f.issues} issue(s)</span>` : '<span class="ok-text">· ready</span>'}${f.overdue ? ' · <span class="warn-text">review due</span>' : ''}</p>
-        <p class="muted small">${f.owner_id ? 'Owner: ' + esc(FB.org.personName(f.owner_id)) : 'No owner'}</p>
-        <div class="row-actions"><a class="btn small" href="#/admin/flows/${f.id}">Design</a><a class="btn small" href="#/handbook/${f.id}">Handbook</a>
-        ${f.status === 'archived' ? `<button class="btn small" data-restore="${f.id}">Restore</button><button class="btn small danger ghost" data-del="${f.id}">Delete…</button>` : `<button class="btn small ghost" data-archive="${f.id}">Archive</button>`}</div></div>`;
     const setStatus = async (id, status) => {
       const full = await api.get('/admin/flows/' + id);
       try { await api.put('/admin/flows/' + id, { name: full.name, description: full.description, graph: full.graph, doc: full.doc, status }); toast(status === 'archived' ? 'Archived' : 'Restored as draft', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); }
     };
-    const draw = () => {
-      const shown = flows.filter(f => FB.org.match(f, st, f.name + ' ' + (f.description || '')));
-      $('#flList', main).innerHTML = FB.org.groupedCards(shown, f => f.area_id, card, 'No flows match.');
+    const wire = () => {
       $$('[data-archive]', main).forEach(b => b.onclick = () => { if (confirm('Archive this process? It disappears for everyone; running processes continue. You can restore it later.')) setStatus(b.dataset.archive, 'archived'); });
       $$('[data-restore]', main).forEach(b => b.onclick = () => setStatus(b.dataset.restore, 'draft'));
       $$('[data-del]', main).forEach(b => b.onclick = async () => { if (confirm('Delete this archived flow and ALL its process runs for good? This cannot be undone.')) { try { await api.del('/admin/flows/' + b.dataset.del); FB.render(); } catch (e) { toast(e.message, 'error'); } } });
+    };
+    const draw = () => {
+      const shown = flows.filter(f => FB.org.match(f, st, f.name + ' ' + (f.description || '')));
+      FB.org.register($('#flList', main), shown, [
+        { label: 'Process', cell: f => `<a href="#/admin/flows/${f.id}"><b>${esc(f.name)}</b></a> ${FB.org.status(f.status)}`, sort: f => f.name.toLowerCase() },
+        { label: 'Area', cell: FB.org.cell.areaChip, sort: f => FB.org.areaName(f.area_id) },
+        { label: 'Owner', cell: f => (f.owner_id ? esc(FB.org.personName(f.owner_id)) : '<span class="muted">none</span>'), sort: f => (f.owner_id ? FB.org.personName(f.owner_id) : '') },
+        { label: 'Steps', cell: f => f.steps, sort: f => f.steps, cls: 'num' },
+        { label: 'Version', cell: f => 'v' + f.version, sort: f => f.version, cls: 'num' },
+        { label: 'Runs', cell: f => `${f.runs}${f.running ? ` <span class="muted">(${f.running} running)</span>` : ''}`, sort: f => f.runs, cls: 'num' },
+        { label: 'Check', cell: f => (f.issues ? `<span class="warn-text">${f.issues} issue${f.issues === 1 ? '' : 's'}</span>` : '<span class="ok-text">ready</span>') + (f.overdue ? ' · <span class="warn-text">review due</span>' : ''), sort: f => f.issues || 0 },
+        { label: '', cls: 'actions-cell', cell: f => `<a class="btn small" href="#/admin/flows/${f.id}">Design</a> <a class="btn small" href="#/handbook/${f.id}">Handbook</a> ${f.status === 'archived' ? `<button class="btn small" data-restore="${f.id}">Restore</button> <button class="btn small danger ghost" data-del="${f.id}">Delete…</button>` : `<button class="btn small ghost" data-archive="${f.id}">Archive</button>`}`, sort: () => '' },
+      ], { empty: 'No flows match.', one: 'process', many: 'processes', total: flows.length, after: wire });
+      wire();
     };
     FB.org.filters($('#flFilters', main), st, { status: true, placeholder: 'Search flows…' }, draw);
     draw();

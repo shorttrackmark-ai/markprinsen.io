@@ -585,3 +585,19 @@ pre.code { border-radius: 2px; background: var(--surface-2); border: 1px solid v
   .topbar { gap: 8px; padding: 0 10px; }
   .topbar-right { gap: 6px; }
 }
+
+/* registers: sortable, ruled lists */
+table.register th.sortable { cursor: pointer; user-select: none; position: relative; padding-right: 24px; }
+table.register th.sortable:hover { background: var(--head); }
+table.register th.asc::after, table.register th.desc::after { content: ''; position: absolute; right: 9px; top: 50%; border: 4px solid transparent; }
+table.register th.asc::after { border-bottom-color: var(--primary); margin-top: -7px; }
+table.register th.desc::after { border-top-color: var(--primary); margin-top: -1px; }
+table.register th.num, table.register td.num { text-align: right; }
+table.register td { padding: 6px 10px; }
+table.register td.wide { white-space: normal; min-width: 220px; max-width: 420px; }
+.clip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+table.register td.actions-cell { text-align: right; white-space: nowrap; }
+table.register td a { text-decoration: none; }
+table.register td a:hover { text-decoration: underline; }
+.reg-foot { margin: 6px 2px 0; }
+.register-empty { padding: 18px; background: var(--surface); border: 1px dashed var(--border-strong); text-align: center; }

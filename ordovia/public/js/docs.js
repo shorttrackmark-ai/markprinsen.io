@@ -29,9 +29,16 @@
       <div id="dcFilters"></div><div id="dcList"></div></div>`;
     const draw = () => {
       const shown = list.filter(d => FB.org.match(d, st, [d.name, d.description, d.owner, d.file_name, d.folder, kindLabel(d.kind)].join(' ')) && (!st.kind || d.kind === st.kind) && (!st.folder || (st.folder === '-' ? !d.folder : d.folder === st.folder || (d.folder || '').startsWith(st.folder + ' / '))));
-      $('#dcList', main).innerHTML = FB.org.groupedCards(shown, d => d.area_id, d => `<a class="card link-card" href="#/documents/${d.id}"><h3>${esc(d.name)} ${FB.org.status(d.status)}</h3>
-        <p class="small muted">${d.folder ? 'Folder: ' + esc(d.folder) + ' · ' : ''}${esc(kindLabel(d.kind))} · v${d.version}${d.file_name ? ' · ' + esc(d.file_name) : ''}</p>
-        <p class="muted small">${d.owner ? 'Owner: ' + esc(d.owner) : 'No owner'}${d.overdue ? ' · <span class="warn-text">review due</span>' : ''}</p></a>`, 'No documents match.');
+      FB.org.register($('#dcList', main), shown, [
+        { label: 'Document', cell: d => `<a href="#/documents/${d.id}"><b>${esc(d.name)}</b></a> ${FB.org.status(d.status)}`, sort: d => d.name.toLowerCase() },
+        { label: 'Kind', cell: d => esc(kindLabel(d.kind)), sort: d => kindLabel(d.kind) },
+        { label: 'Folder', cell: d => (d.folder ? esc(d.folder) : '<span class="muted">–</span>'), sort: d => d.folder || '' },
+        { label: 'Area', cell: FB.org.cell.areaChip, sort: d => FB.org.areaName(d.area_id) },
+        { label: 'Owner', cell: FB.org.cell.person, sort: d => d.owner || '' },
+        { label: 'Version', cell: d => 'v' + d.version, sort: d => d.version, cls: 'num' },
+        { label: 'Next review', cell: FB.org.cell.review, sort: d => d.reviewDue || '9999' },
+        { label: 'File', cell: d => (d.file_id ? `<a href="/api/files/${d.file_id}" target="_blank" rel="noopener">open</a> <span class="muted small">${esc(fmtSize(d.size || 0))}</span>` : '–'), sort: d => d.file_name || '' },
+      ], { href: d => '#/documents/' + d.id, empty: 'No documents match.', one: 'document', many: 'documents', total: list.length });
     };
     FB.org.filters($('#dcFilters', main), st, { status: FB.isAdmin(), placeholder: 'Search documents…' }, draw);
     const kindSel = document.createElement('select'); kindSel.innerHTML = '<option value="">All kinds</option>' + KINDS.map(k => `<option value="${k[0]}">${esc(k[1])}</option>`).join('');

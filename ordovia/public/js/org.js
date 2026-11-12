@@ -32,6 +32,28 @@
       <div class="cards">${g.items.map(render).join('')}</div></section>`).join('');
   };
 
+  /** A register: one ruled, sortable table (the way lists look in business software). Columns: [{ label, cell(item) -> html, sort(item) -> value, cls }].
+   *  `host` keeps its sort between redraws; `opts.href(item)` makes a row clickable; `opts.empty` is shown when there is nothing. Click a heading to sort. */
+  Org.register = (host, items, cols, opts) => {
+    opts = opts || {};
+    const sortState = host._sort || (host._sort = { i: 0, dir: 1 });
+    const val = (c, it) => { const v = c.sort ? c.sort(it) : String(c.cell(it)).replace(/<[^>]*>/g, ''); return v == null ? '' : v; };
+    const col = cols[sortState.i] || cols[0];
+    const rows = items.slice().sort((a, b) => { const x = val(col, a), y = val(col, b); const r = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' }); return r * sortState.dir; });
+    if (!rows.length) { host.innerHTML = `<p class="muted register-empty">${opts.empty || 'Nothing here yet.'}</p>`; return; }
+    host.innerHTML = `<div class="table-wrap"><table class="grid register"><thead><tr>${cols.map((c, i) => `<th class="${c.cls || ''} sortable ${i === sortState.i ? (sortState.dir > 0 ? 'asc' : 'desc') : ''}" data-col="${i}" aria-sort="${i === sortState.i ? (sortState.dir > 0 ? 'ascending' : 'descending') : 'none'}">${esc(c.label)}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map((it, r) => `<tr ${opts.href ? `class="clickable" data-href="${esc(opts.href(it))}"` : ''}>${cols.map(c => `<td class="${c.cls || ''}">${c.cell(it)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      <p class="reg-foot small muted">${rows.length} ${rows.length === 1 ? (opts.one || 'item') : (opts.many || 'items')}${opts.total && opts.total !== rows.length ? ` of ${opts.total}` : ''}</p>`;
+    $$('th.sortable', host).forEach(th => th.onclick = () => { const i = Number(th.dataset.col); sortState.dir = sortState.i === i ? -sortState.dir : 1; sortState.i = i; Org.register(host, items, cols, opts); if (opts.after) opts.after(); });
+    if (opts.href) $$('tbody tr[data-href]', host).forEach(tr => tr.onclick = (e) => { if (e.target.closest('a, button, input, select')) return; location.hash = tr.dataset.href; });
+  };
+  /** Cells that registers share. */
+  Org.cell = {
+    areaChip: (it) => (it.area_id ? Org.chip(it.area_id) : '<span class="muted">–</span>'),
+    person: (it) => esc(it.owner || (it.owner_id ? Org.personName(it.owner_id) : '') || '–'),
+    review: (it) => (it.reviewDue ? `<span class="${it.overdue ? 'warn-text' : ''}">${esc(String(it.reviewDue).slice(0, 10))}${it.overdue ? ' · overdue' : ''}</span>` : '<span class="muted">–</span>'),
+  };
+
   /** A filter bar (search, area, status). `state` = { q, area, status }; calls onChange() when it changes. */
   Org.filters = (host, state, opts, onChange) => {
     opts = opts || {};

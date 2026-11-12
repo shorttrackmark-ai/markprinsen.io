@@ -115,7 +115,11 @@
     const st = { q: '', area: '', status: 'live' };
     const draw = () => {
       const shown = list.filter(d => FB.org.match(d, st, d.name));
-      $('#dbList').innerHTML = FB.org.groupedCards(shown, d => d.area_id, d => `<a class="card link-card" href="#/dashboards/${d.id}"><h3>${esc(d.name)} ${FB.org.status(d.status)}</h3><p class="muted">${d.widgets} widget${d.widgets === 1 ? '' : 's'}</p></a>`, 'No dashboards match.');
+      FB.org.register($('#dbList'), shown, [
+        { label: 'Dashboard', cell: d => `<a href="#/dashboards/${d.id}"><b>${esc(d.name)}</b></a> ${FB.org.status(d.status)}`, sort: d => d.name.toLowerCase() },
+        { label: 'Area', cell: FB.org.cell.areaChip, sort: d => FB.org.areaName(d.area_id) },
+        { label: 'Widgets', cell: d => d.widgets, sort: d => d.widgets, cls: 'num' },
+      ], { href: d => '#/dashboards/' + d.id, empty: 'No dashboards match.', one: 'dashboard', many: 'dashboards', total: list.length });
     };
     FB.org.filters($('#dbFilters'), st, { status: FB.isAdmin(), placeholder: 'Search dashboards…' }, draw);
     draw();
