@@ -326,7 +326,7 @@
           ${recForm ? `<label>Show field<select data-p="recordLabel"><option value="">(automatic)</option>${recForm.fields.filter(x => x.type !== 'heading').map(x => `<option value="${esc(x.key)}" ${x.key === f.recordLabel ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></label>
           <p class="hint">Formulas can read the linked record: ${recForm.fields.filter(x => x.type !== 'heading').slice(0, 4).map(x => `<code>${esc(f.key)}.${esc(x.key)}</code>`).join(' ')}</p>` : ''}` : ''}
         ${!['heading', 'calc'].includes(f.type) ? `<label>Default value <small class="muted">(formula)</small><input data-p="default" class="mono" value="${esc(f.default || '')}" placeholder='e.g. TODAY() or "Sales"'></label>` : ''}
-        <label>Show only when <small class="muted">(formula)</small><input data-p="visibleIf" class="mono" value="${esc(f.visibleIf || '')}" placeholder='e.g. type == "Other"'></label>
+        <div class="lbl-row"><b>Show this field only when</b></div><div id="visCond"></div>
         ${['text', 'textarea', 'number', 'email', 'date', 'select', 'radio', 'person', 'record'].includes(f.type) ? `<label>Validation rule <small class="muted">(formula, must be true)</small><input data-p="validate" class="mono" value="${esc(f.validate || '')}" placeholder="e.g. end_date >= start_date"></label>
           <label>Validation message<input data-p="validateMsg" value="${esc(f.validateMsg || '')}"></label>` : ''}
         <label>Help text<input data-p="help" value="${esc(f.help || '')}"></label>
@@ -334,6 +334,9 @@
         <div class="err" id="exprErr"></div>
         <div class="hint">Names: ${names.map(k => `<code>${esc(k)}</code>`).join(' ') || '–'}<br>Functions: ${FB.expr.functions.map(n => `<code>${n}</code>`).join(' ')}</div></div>`;
 
+      const vc = $('#visCond', box);
+      if (vc) FB.cond.render(vc, { expr: f.visibleIf || '', fields: form.fields.filter(x => x !== f && x.type !== 'heading' && x.key).map(x => ({ key: x.key, label: x.label || x.key, type: x.type, options: x.options })), empty: 'Always shown.',
+        onChange: (x) => { if (x) f.visibleIf = x; else delete f.visibleIf; $('#exprErr', box).textContent = x ? (FB.expr.check(x) || '') : ''; touch(); drawList(); drawPreview(); } });
       $$('[data-p]', box).forEach(inp => {
         const ev = inp.type === 'checkbox' || inp.tagName === 'SELECT' ? 'change' : 'input';
         inp.addEventListener(ev, () => {

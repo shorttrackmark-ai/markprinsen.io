@@ -233,6 +233,22 @@
     }
 
     // ---- properties panel ----
+    /** The fields a rule on an arrow can look at: everything the forms of this process collect, the object it works on, calculations, and who started it. */
+    function ruleFields() {
+      const out = new Map(), formsUsed = [];
+      const add = (key, label, type, options) => { if (!out.has(key)) out.set(key, { key, label, type, options }); };
+      for (const n of g.nodes) {
+        if (n.formId && ['start', 'task'].includes(n.type)) { const f = forms.find(x => x.id === Number(n.formId)); if (f && !formsUsed.includes(f)) formsUsed.push(f); }
+        if (n.type === 'action') FB.logic.assignments(n.assignments).forEach(a => add(a.name, a.name + ' (calculated)', 'calc'));
+      }
+      const labelCount = {}; formsUsed.forEach(f => f.fields.forEach(x => { if (x.type !== 'heading') labelCount[x.label] = (labelCount[x.label] || 0) + 1; }));
+      for (const f of formsUsed) for (const x of f.fields) if (x.type !== 'heading') add(x.key, labelCount[x.label] > 1 ? x.label + ' (' + f.name + ')' : x.label, x.type, x.options);
+      const st = g.nodes.find(n => n.type === 'start'), sf = st && st.subjectForm ? forms.find(x => x.id === Number(st.subjectForm)) : null;
+      if (sf) sf.fields.filter(x => x.type !== 'heading').forEach(x => add('subject.' + x.key, sf.name + ': ' + x.label, x.type, x.options));
+      (meta.categories || []).forEach(c => add('initiator.' + c.toLowerCase().replace(/[^a-z0-9]+/g, '_'), 'Person who started: ' + c, 'text'));
+      return [...out.values()];
+    }
+
     function varsHint() {
       const names = new Set(['initiator.name', 'initiator.department', 'initiator.function']);
       for (const n of g.nodes) {
@@ -276,9 +292,11 @@
         const e = g.edges.find(x => x.id === sel.id); if (!e) { sel = null; drawProps(); return; }
         box.innerHTML = `<h4>Arrow</h4>
           <label>Label<input data-e="label" value="${esc(e.label || '')}" placeholder="e.g. Yes"></label>
-          <label>Condition <small class="muted">(empty = otherwise)</small><textarea data-e="condition" rows="2" class="mono" placeholder="e.g. days > 3">${esc(e.condition || '')}</textarea></label>
-          <div class="err" id="eErr"></div>${varsHint()}<button class="btn danger small" id="delSel">Delete arrow</button>`;
-        $$('[data-e]', box).forEach(inp => inp.oninput = () => { e[inp.dataset.e] = inp.value; touch(); draw(); if (inp.dataset.e === 'condition') $('#eErr').textContent = inp.value ? (FB.expr.check(inp.value) || '') : ''; });
+          <div class="lbl-row"><b>When is this arrow taken?</b></div><div id="edgeCond"></div>
+          <div class="err" id="eErr"></div><button class="btn danger small" id="delSel">Delete arrow</button>`;
+        $$('[data-e]', box).forEach(inp => inp.oninput = () => { e[inp.dataset.e] = inp.value; touch(); draw(); });
+        FB.cond.render($('#edgeCond', box), { expr: e.condition || '', fields: ruleFields(), empty: 'No rule: this arrow is taken when no other arrow from this step matches (“otherwise”).',
+          onChange: (x) => { if (x) e.condition = x; else delete e.condition; touch(); draw(); $('#eErr').textContent = x ? (FB.expr.check(x) || '') : ''; } });
         $('#delSel').onclick = removeSel;
         return;
       }

@@ -105,3 +105,6 @@ Menu for everyone: My tasks, Cases, Handbook, Data, Documents, Dashboards, Areas
 
 ## First-time builder fixes (iteration 12)
 New process / form / dashboard open a proper dialog (name, and the area it belongs to) instead of a browser prompt. In the designer a step's form can be created on the spot ("+ New form for this step": named after the step, in the process's area, as a draft) and opened with "Edit this form" (the process is saved first); archived forms are no longer offered.
+
+## Rule builder (built)
+Conditions are built, not typed: on a decision arrow ("When is this arrow taken?") and on a form field ("Show this field only when"): choose a field (by its label), "is / is not / contains / is greater than / is at least / is before / is ticked / is filled in…" depending on its type, and a value (a dropdown for choices, a date or "today" for dates); parts are joined with "and also" or "or". It reads and writes the ordinary formula (`days > 3 and type != "Sick"`), so existing rules open in it; rules it cannot read (functions, mixed and/or) show as a formula to edit, and "Edit as formula" is always available. `public/js/cond.js`, test/cond.test.js.
