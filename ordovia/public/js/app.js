@@ -134,6 +134,7 @@
       ${t.due_at ? `<p class="muted small">Due ${esc(fmtDate(t.due_at))}</p>` : ''}</div><span class="status s-${esc(t.status)}">${esc(t.status)}</span></div>
       ${d.instructions ? `<div class="card instructions"><h4>Work instruction</h4><p>${richText(d.instructions)}</p></div>` : ''}
       ${(d.documents || []).length ? `<div class="card instructions"><h4>Documents for this step</h4>${FB.org.docLinks(d.documents)}</div>` : ''}
+      ${(d.links || []).length ? `<div class="card instructions"><h4>Linked at this step</h4>${FB.org.linkList(d.links)}</div>` : ''}
       <div class="two-col"><div class="card" id="taskForm"></div>
       <aside>${d.previous.length ? `<h3>Earlier in this process</h3>${d.previous.map(s => { const f = formById(s.form_id); return f ? `<div class="card prev"><div class="muted small">${esc(s.task_name || f.name)} · ${esc(s.who || 'automatic')} · ${esc(fmtDate(s.created_at))}</div>${FB.forms.summary(f, s.data)}</div>` : ''; }).join('')}` : '<p class="muted">This is the first step.</p>'}</aside></div></div>`;
     const box = $('#taskForm', main);
@@ -213,12 +214,15 @@
         <div class="card"><h4>Owner</h4><p>${esc(h.owner || h.doc.owner || '–')}</p><h4>Scope</h4><p>${esc(h.doc.scope || '–')}</p></div>
         <div class="card"><h4>Records</h4><p>${esc(h.doc.records || '–')}</p></div></div>
       <div class="card mini-flow">${FB.flows.static(h.graph)}</div>
+      <div id="hbLinks"></div>
       <h2>Steps</h2><ol class="steps">${steps.map(s => `<li class="step step-${s.type}"><div class="step-head"><b>${esc(s.name)}</b><span class="tag">${typeLabel[s.type] || s.type}</span></div>
         ${s.responsible ? `<div class="small"><span class="muted">Responsible:</span> ${esc(s.responsible)}${s.dueHours ? ` · <span class="muted">within</span> ${s.dueHours} h` : ''}</div>` : ''}
         ${s.form ? `<div class="small"><span class="muted">Form:</span> ${esc(s.form)}</div>` : ''}
         ${s.instructions ? `<div class="step-instr">${richText(s.instructions)}</div>` : ''}
         ${(s.documents || []).length ? `<div class="step-docs">${FB.org.docLinks(s.documents)}</div>` : ''}
+        ${(s.links || []).length ? `<div class="step-docs">${FB.org.linkList(s.links)}</div>` : ''}
         ${s.next.length > 1 ? `<div class="small muted">${s.next.map(n => `${esc(n.when || 'otherwise')} → ${esc(n.to)}`).join(' · ')}</div>` : ''}</li>`).join('')}</ol></div>`;
+    FB.org.links($('#hbLinks', main), { type: 'flow', id: h.id }, { title: 'Links', outLabel: 'Refers to', inLabel: 'Linked from' });
     const rv = $('#hbReview', main);
     if (rv) rv.onclick = async () => { try { await api.post(`/flows/${h.id}/review`); toast('Marked as reviewed', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); } };
   });

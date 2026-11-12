@@ -54,6 +54,7 @@
       <p class="muted">${esc(form.name)} #${o.id} · added ${esc(fmtDate(o.created_at))}${o.who ? ' by ' + esc(o.who) : ''}${o.updated_at ? ` · changed ${esc(fmtDate(o.updated_at))}` : ''}</p></div>
       <div class="actions">${d.startable.map(f => `<button class="btn primary" data-start="${f.id}">${esc(f.name)}</button>`).join('')}${d.canEdit ? '<button class="btn" id="obEdit">Edit</button>' : ''}</div></div>
       <div class="two-col"><div><h2>Attributes</h2><div class="card" id="obAttr"><dl class="summary">${attributes(form, o.data)}</dl></div>
+        <div id="obLinks"></div>
         ${d.linkedFrom.length ? `<h2>Linked from</h2><ul class="linked">${d.linkedFrom.map(l => `<li><a href="#/data/${l.formId}?open=${l.id}">${esc(l.form)} #${l.id}</a></li>`).join('')}</ul>` : ''}</div>
       <div><h2>Processes on this ${esc(form.name.toLowerCase())} <span class="count">${d.runs.length}</span></h2><div id="obRuns"></div>
         ${d.startable.length ? '' : '<p class="muted small">No process works on this class yet. In a flow, click the white canvas and choose this class under “Works on”.</p>'}</div></div></div>`;
@@ -63,6 +64,7 @@
       { label: 'Started', cell: r => esc(fmtDate(r.created_at)), sort: r => r.created_at },
       { label: 'By', cell: r => esc(r.started_by || '–'), sort: r => r.started_by || '' },
     ], { href: r => '#/processes/' + r.id, empty: 'No process has worked on this yet.', one: 'run', many: 'runs' });
+    FB.org.links($('#obLinks', main), { type: 'object', id: o.id }, { title: 'Links', outLabel: 'Documents, photos and more', inLabel: 'Linked from' });
     $$('[data-start]', main).forEach(b => b.onclick = () => FB.org.start(d.startable.find(f => f.id === Number(b.dataset.start)), b, o.id));
     const ed = $('#obEdit', main);
     if (ed) ed.onclick = async () => {
@@ -77,7 +79,7 @@
     return form.fields.filter(f => f.type !== 'heading').map(f => {
       let v = data[f.key];
       if (v == null || v === '') return `<dt>${esc(f.label)}</dt><dd class="muted">–</dd>`;
-      if (f.type === 'file') return `<dt>${esc(f.label)}</dt><dd><a href="/api/files/${esc(v)}" target="_blank" rel="noopener">${esc(data[f.key + '_label'] || 'File')}</a></dd>`;
+      if (f.type === 'file') { const nm = data[f.key + '_label'] || 'File'; return `<dt>${esc(f.label)}</dt><dd><a href="/api/files/${esc(v)}" target="_blank" rel="noopener">${/\.(png|jpe?g|gif|webp)$/i.test(nm) ? `<img class="attr-photo" src="/api/files/${esc(v)}" alt="${esc(nm)}">` : esc(nm)}</a></dd>`; }
       if ((f.type === 'person' || f.type === 'record') && data[f.key + '_label']) v = data[f.key + '_label'];
       return `<dt>${esc(f.label)}</dt><dd>${fmtVal(v)}</dd>`;
     }).join('');

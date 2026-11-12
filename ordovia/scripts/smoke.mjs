@@ -201,8 +201,50 @@ console.log('classes, objects, person attributes');
   r = await put('/api/admin/person-fields', { fields: [{ label: 'Name', type: 'text' }] }); ok(r.status === 400, 'reserved attribute names are refused');
   // a process on an object cannot be a public web form
   { const fl = (await get('/api/admin/flows/' + calib.id)).data; const st = fl.graph.nodes.find(n => n.type === 'start'); st.publicEnabled = true;
-    r = await put('/api/admin/flows/' + calib.id, { name: fl.name, description: fl.description, graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 200 && r.data.status === 'draft', 'an active process that also works on an object and is public is set back to draft', r.data); }
+    r = await put('/api/admin/flows/' + calib.id, { name: fl.name, description: fl.description, graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 200 && r.data.status === 'draft', 'an active process that also works on an object and is public is set back to draft', r.data);
+    st.publicEnabled = false; r = await put('/api/admin/flows/' + calib.id, { name: fl.name, description: fl.description, graph: fl.graph, doc: fl.doc, status: 'active' }); ok(r.status === 200 && r.data.status === 'active', 'switching the web form off makes it usable again'); }
   r = await get('/api/admin/health'); ok(!r.data.items.some(i => /“subject/.test(i.title)), 'no false alarm about the subject variable');
+}
+
+console.log('links');
+{
+  const adminCookie = cookie;
+  const login = async (email) => { cookie = ''; const x = await post('/api/login', { email, password: 'demo1234' }); return x.status === 200; };
+  r = await get('/api/documents'); const procDoc = r.data.find(d => d.name === 'Calibration procedure'), photoDoc = r.data.find(d => d.kind === 'photo');
+  ok(photoDoc && photoDoc.mime === 'image/png', 'a photo is a document of kind photo, stored as an image');
+  r = await get('/api/objects'); const machine = r.data.find(o => o.name === 'Machine');
+  r = await get('/api/objects/' + machine.id); const m1 = r.data.objects.find(o => o.data.machine_id === 'M-001'), m3 = r.data.objects.find(o => o.data.machine_id === 'M-003');
+  r = await get('/api/links?type=object&id=' + m3.id); ok(r.data.out.length === 2 && r.data.out.some(x => x.image === photoDoc.file_id && x.note === 'Front view') && r.data.out.some(x => x.label === 'Calibration procedure' && x.note === 'Section 2: tolerances'), 'a machine lists its photo and its procedure, with the part that matters', r.data.out);
+  r = await get('/api/links?type=document&id=' + procDoc.id); ok(r.data.in.filter(x => x.type === 'object').length === 2 && r.data.in.some(x => x.type === 'flow' && x.sub_label === 'Calibrate' && x.derived), 'the other end shows the link too (machines, and the step that uses it)', r.data.in);
+
+  r = await post('/api/links', { a: { type: 'object', id: m1.id }, b: { type: 'document', id: photoDoc.id }, note: 'seen from the left' }); ok(r.status === 200 && r.data.id, 'link a machine to a photo'); const linkId = r.data.id;
+  r = await post('/api/links', { a: { type: 'object', id: m1.id }, b: { type: 'document', id: photoDoc.id } }); ok(r.status === 409, 'the same link cannot be made twice');
+  r = await post('/api/links', { a: { type: 'object', id: m1.id }, b: { type: 'object', id: m1.id } }); ok(r.status === 400, 'an item cannot link to itself');
+  r = await post('/api/links', { a: { type: 'object', id: m1.id }, b: { type: 'document', id: 999999 } }); ok(r.status === 404, 'a link to something that does not exist is refused');
+  r = await post('/api/links', { a: { type: 'object', id: m1.id }, b: { type: 'document', id: procDoc.id }, showIf: 'total >' }); ok(r.status === 400, 'a broken condition is refused');
+  r = await get('/api/link-search?q=torque'); ok(r.data.results.some(x => x.type === 'document' && x.id === photoDoc.id && x.image) && r.data.results.some(x => x.type === 'object' && x.label === 'Torque wrench set'), 'search finds documents (with their picture) and objects');
+  r = await get('/api/link-search?type=flow&q=calib'); ok(r.data.results.length === 1 && r.data.results[0].steps.some(s => s.name === 'Calibrate'), 'search finds processes with their steps');
+
+  // a step shows its links only when their condition is true for the run
+  const calib = (await get('/api/home')).data.flows.find(x => x.name === 'Machine calibration');
+  const taskOf = async (machineId) => { const st = await post('/api/flows/' + calib.id + '/start', { subject: machineId }); const ins = await get('/api/instances/' + st.data.instanceId); return (await get('/api/tasks/' + ins.data.tasks[0].id)).data; };
+  const t3 = await taskOf(m3.id), t1 = await taskOf(m1.id);
+  ok(t3.links.some(x => x.label === 'Torque wrench set (photo)') && !t1.links.some(x => x.label === 'Torque wrench set (photo)'), 'a conditional link shows at the step only when its formula is true (only for the torque wrench set)', [t3.links.length, t1.links.length]);
+  r = await get('/api/handbook/' + calib.id); ok(r.data.steps.find(s => s.name === 'Calibrate').links.some(x => x.showIf === 'subject.machine_id == "M-003"'), 'the handbook shows every link of a step, with its condition');
+
+  // who may link
+  await login('carla@example.com'); r = await post('/api/links', { a: { type: 'object', id: m1.id }, b: { type: 'document', id: procDoc.id } }); ok(r.status === 403, 'a colleague cannot make links');
+  r = await del('/api/links/' + linkId); ok(r.status === 403, 'or remove them');
+  await login('daan@example.com'); r = await post('/api/links', { a: { type: 'flow', id: calib.id }, b: { type: 'document', id: photoDoc.id }, note: 'owner links own document' }); ok(r.status === 200, 'the owner of a document can link it'); const l2 = r.data.id;
+  r = await del('/api/links/' + l2); ok(r.status === 200, 'and remove the link');
+  cookie = adminCookie;
+  r = await del('/api/links/' + linkId); ok(r.status === 200, 'an administrator removes a link');
+  r = await get('/api/links?type=object&id=' + m1.id); ok(!r.data.out.some(x => x.note === 'seen from the left'), 'the link is gone on both sides');
+
+  // removing an object removes its links
+  r = await post('/api/forms/' + machine.id + '/records', { data: { name: 'Temporary rig', machine_id: 'T-1', location: 'Hall A', status: 'In service', interval_days: 30 } }); ok(r.status === 200, 'add a temporary machine', r.data); const tmp = r.data.id;
+  r = await post('/api/links', { a: { type: 'object', id: tmp }, b: { type: 'document', id: photoDoc.id } }); ok(r.status === 200, 'link it');
+  r = await del('/api/records/' + tmp); r = await get('/api/links?type=document&id=' + photoDoc.id); ok(!r.data.in.some(x => x.type === 'object' && x.id === tmp), 'a deleted object takes its links with it');
 }
 
 console.log('as a colleague');

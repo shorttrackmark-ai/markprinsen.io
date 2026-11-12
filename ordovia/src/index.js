@@ -358,7 +358,7 @@ function attachStatements(c, form, data, instanceId) {
 }
 
 route('GET', '/api/tasks/:id', async (c, { id }) => {
-  const t = await first(c.db, `SELECT t.*, i.vars, i.title AS process, i.started_by, i.graph, i.id AS iid, i.status AS istatus
+  const t = await first(c.db, `SELECT t.*, i.vars, i.title AS process, i.started_by, i.graph, i.id AS iid, i.flow_id, i.status AS istatus
     FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE t.id = ?`, Number(id));
   if (!t) throw new HttpError(404, 'Task not found');
   const inst = { id: t.iid, started_by: t.started_by, vars: t.vars };
@@ -372,6 +372,7 @@ route('GET', '/api/tasks/:id', async (c, { id }) => {
     task: { id: t.id, name: t.name, status: t.status, form_id: t.form_id, created_at: t.created_at, due_at: t.due_at, completed_at: t.completed_at, instance_id: t.iid, process: t.process },
     instructions: node.instructions || '',
     documents: await docsByIds(c, node.docIds, node.docSections || {}),
+    links: (await linksOf(c, { type: 'flow', id: t.flow_id, sub: t.node_id }, parse(t.vars, {}))).out.filter(x => !x.derived),
     assignee: D.describe(parse(t.assignee, {})),
     canComplete: t.status === 'open' && D.matches(c.user.id, parse(t.assignee, {}), inst),
     vars: parse(t.vars, {}),
@@ -497,7 +498,7 @@ route('PUT', '/api/records/:id', async (c, { id }) => {
   const att = attachStatements(c, form, res.data, s.instance_id); if (att.length) await c.db.batch(att);
 }, { admin: true });
 
-route('DELETE', '/api/records/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM submissions WHERE id = ?', Number(id)); }, { admin: true });
+route('DELETE', '/api/records/:id', async (c, { id }) => { await c.db.batch([c.db.prepare('DELETE FROM submissions WHERE id = ?').bind(Number(id)), c.db.prepare("DELETE FROM links WHERE (a_type = 'object' AND a_id = ?1) OR (b_type = 'object' AND b_id = ?1)").bind(Number(id))]); }, { admin: true });
 
 // ---------------------------------------------------------------- handbook (process documentation)
 route('GET', '/api/handbook', async (c) => {
@@ -521,6 +522,7 @@ route('GET', '/api/handbook/:id', async (c, { id }) => {
   }));
   const due = reviewDueAt(f);
   const docMap = new Map((await docsByIds(c, [...new Set(steps.flatMap(x => x.docIds))])).map(d => [d.id, d]));
+  for (const x of steps) x.links = (await linksOf(c, { type: 'flow', id: f.id, sub: x.id })).out.filter(l => !l.derived);
   steps.forEach(x => { x.documents = x.docIds.map(i => docMap.get(i) && { ...docMap.get(i), section: String(x.docSections[i] || '') }).filter(Boolean); });
   return { id: f.id, name: f.name, description: f.description, doc: parse(f.doc, {}), version: f.version, updated_at: f.updated_at, graph, steps, stats,
     status: f.status, area_id: f.area_id, area: f.area_name || '', owner_id: f.owner_id, owner: f.owner_name || '', reviewMonths: f.review_months, reviewedAt: f.reviewed_at, reviewDue: due, overdue: !!(due && due < now().slice(0, 10)),
@@ -684,7 +686,7 @@ route('DELETE', '/api/admin/flows/:id', async (c, { id }) => {
   if (f.status !== 'archived') throw new HttpError(409, 'Archive the process first: archived items can be deleted for good.');
   const n = (await first(c.db, 'SELECT count(*) AS n FROM instances WHERE flow_id = ?', f.id)).n;
   c.note(f.name, n ? n + ' process run(s) deleted with it' : '');
-  await run(c.db, 'DELETE FROM flows WHERE id = ?', f.id);
+  await c.db.batch([c.db.prepare('DELETE FROM flows WHERE id = ?').bind(f.id), c.db.prepare("DELETE FROM links WHERE (a_type = 'flow' AND a_id = ?1) OR (b_type = 'flow' AND b_id = ?1)").bind(f.id)]);
 }, { admin: true });
 
 /** Remember a flow's state at this version (history to look at or restore). Keeps the last 40. */
@@ -1212,7 +1214,7 @@ route('GET', '/api/files/:id', async (c, { id }) => {
 });
 
 // ---------------------------------------------------------------- documents: the company library (norms, policies, instructions, templates)
-const DOC_KINDS = ['norm', 'policy', 'procedure', 'instruction', 'template', 'other'];
+const DOC_KINDS = ['norm', 'policy', 'procedure', 'instruction', 'template', 'photo', 'other'];
 /** The documents linked to a step; `sections` ({docId: "chapter 4.2"}) says which part of each one matters at that step. */
 async function docsByIds(c, ids, sections) {
   ids = (ids || []).map(Number).filter(Number.isInteger);
@@ -1240,7 +1242,7 @@ route('GET', '/api/documents', async (c) => {
 route('GET', '/api/documents/:id', async (c, { id }) => {
   const d = await first(c.db, 'SELECT d.*, p.name AS owner, a.name AS area FROM documents d LEFT JOIN persons p ON p.id = d.owner_id LEFT JOIN areas a ON a.id = d.area_id WHERE d.id = ?', Number(id));
   if (!d || (d.status === 'archived' && !c.user.is_admin)) throw new HttpError(404, 'Document not found');
-  const versions = await all(c.db, `SELECT v.version, v.note, v.uploaded_at, p.name AS who, f.id AS file_id, f.name AS file_name, f.size FROM document_versions v LEFT JOIN persons p ON p.id = v.uploaded_by
+  const versions = await all(c.db, `SELECT v.version, v.note, v.uploaded_at, p.name AS who, f.id AS file_id, f.name AS file_name, f.size, f.mime FROM document_versions v LEFT JOIN persons p ON p.id = v.uploaded_by
     LEFT JOIN files f ON f.id = v.file_id WHERE v.document_id = ? ORDER BY v.version DESC`, d.id);
   const usedIn = [];
   for (const fl of await all(c.db, "SELECT id, name, graph FROM flows WHERE status = 'active'")) for (const n of parse(fl.graph, { nodes: [] }).nodes) if ((n.docIds || []).map(Number).includes(d.id)) usedIn.push({ id: fl.id, flow: fl.name, step: n.name, section: String((n.docSections || {})[d.id] || '') });
@@ -1292,7 +1294,7 @@ route('DELETE', '/api/admin/documents/:id', async (c, { id }) => {
   if (d.status !== 'archived') throw new HttpError(409, 'Archive the document first: archived items can be deleted for good.');
   const files = await all(c.db, 'SELECT f.id, f.key FROM document_versions v JOIN files f ON f.id = v.file_id WHERE v.document_id = ?', d.id);
   for (const f of files) { if (c.files) await c.files.delete(f.key); }
-  await c.db.batch([...files.map(f => c.db.prepare('DELETE FROM files WHERE id = ?').bind(f.id)), c.db.prepare('DELETE FROM documents WHERE id = ?').bind(d.id)]);
+  await c.db.batch([...files.map(f => c.db.prepare('DELETE FROM files WHERE id = ?').bind(f.id)), c.db.prepare('DELETE FROM documents WHERE id = ?').bind(d.id), c.db.prepare("DELETE FROM links WHERE (a_type = 'document' AND a_id = ?1) OR (b_type = 'document' AND b_id = ?1)").bind(d.id)]);
   c.note(d.name, files.length + ' file(s) deleted');
 }, { admin: true });
 
@@ -1369,4 +1371,122 @@ route('GET', '/api/objects/:fid/:id', async (c, { fid, id }) => {
   const linkedFrom = [];
   for (const l of linking) for (const r of await all(c.db, `SELECT id FROM submissions WHERE form_id = ? AND json_extract(data, '$.${l.key}') = ? ORDER BY id DESC LIMIT 50`, l.f.id, rec.id)) linkedFrom.push({ formId: l.f.id, form: l.f.name, id: r.id });
   return { form, object: { id: rec.id, label: recordLabel(form, rec.id, data), data, created_at: rec.created_at, updated_at: rec.updated_at, who: rec.who }, runs, startable, linkedFrom, canEdit: !!c.user.is_admin };
+});
+
+// ---------------------------------------------------------------- links: connect anything to anything
+// An end of a link is { type: 'document' | 'object' | 'flow', id, sub }: sub is a step of a flow (its node id). a "refers to" b; both ends show the link.
+const LINK_TYPES = ['document', 'object', 'flow'];
+const DOC_KIND_LABEL = { norm: 'Norm', policy: 'Policy', procedure: 'Procedure', instruction: 'Work instruction', template: 'Template', photo: 'Photo / drawing', other: 'Document' };
+const refKey = (r) => `${r.type}:${Number(r.id)}:${r.sub || ''}`;
+const cleanRef = (r) => ({ type: String((r || {}).type || ''), id: Number((r || {}).id), sub: (r || {}).sub ? String(r.sub).slice(0, 40) : null });
+
+/** What the ends of links look like to this user: label, kind, where it lives, a picture if it is one. Ends that are gone or not visible come back with gone: true. */
+async function describeRefs(c, refs) {
+  const out = new Map(), D = await c.dir(), forms = await c.formsMap();
+  const ids = (t) => [...new Set(refs.filter(r => r.type === t && Number.isInteger(r.id)).map(r => r.id))];
+  const qs = (a) => a.map(() => '?').join(',');
+  const docIds = ids('document'), objIds = ids('object'), flowIds = ids('flow');
+  const docs = new Map((docIds.length ? await all(c.db, `SELECT d.id, d.name, d.kind, d.status, d.version, f.id AS file_id, f.mime FROM documents d LEFT JOIN document_versions v ON v.document_id = d.id AND v.version = d.version LEFT JOIN files f ON f.id = v.file_id WHERE d.id IN (${qs(docIds)})`, ...docIds) : []).map(d => [d.id, d]));
+  const objs = new Map((objIds.length ? await all(c.db, `SELECT id, form_id, person_id, data FROM submissions WHERE id IN (${qs(objIds)})`, ...objIds) : []).map(o => [o.id, o]));
+  const flows = new Map((flowIds.length ? await all(c.db, `SELECT id, name, graph, status FROM flows WHERE id IN (${qs(flowIds)})`, ...flowIds) : []).map(f => [f.id, f]));
+  for (const r of refs) {
+    let info = { type: r.type, id: r.id, sub: r.sub || null, gone: true, label: '(removed)', kind: '', href: '', image: null, sub_label: '' };
+    if (r.type === 'document') {
+      const d = docs.get(r.id);
+      if (d && (d.status !== 'archived' || c.user.is_admin)) info = { ...info, gone: false, label: d.name, kind: DOC_KIND_LABEL[d.kind] || 'Document', href: '#/documents/' + d.id, image: d.mime && /^image\//.test(d.mime) ? d.file_id : null, file_id: d.file_id };
+    } else if (r.type === 'object') {
+      const o = objs.get(r.id), form = o && forms.get(o.form_id);
+      if (o && form && form.is_class && (canViewForm(c.user, D, form) || o.person_id === c.user.id)) info = { ...info, gone: false, label: recordLabel(form, o.id, parse(o.data, {})), kind: form.name, href: `#/objects/${form.id}/${o.id}`, form_id: form.id };
+    } else if (r.type === 'flow') {
+      const f = flows.get(r.id);
+      if (f && (f.status === 'active' || c.user.is_admin)) {
+        const node = r.sub ? parse(f.graph, { nodes: [] }).nodes.find(n => n.id === r.sub) : null;
+        if (!r.sub || node) info = { ...info, gone: false, label: f.name, kind: 'Process', href: '#/handbook/' + f.id, sub_label: node ? node.name : '' };
+      }
+    }
+    out.set(refKey(r), info);
+  }
+  return out;
+}
+
+/** The links of one end, both directions. `vars` (a run's data) hides outgoing links whose condition is false. Links made in the flow itself (documents at a step) are included, read-only. */
+async function linksOf(c, ref, vars) {
+  ref = cleanRef(ref);
+  const sub = ref.sub || null;
+  const rowsOut = await all(c.db, 'SELECT * FROM links WHERE a_type = ? AND a_id = ? AND a_sub IS ? ORDER BY id', ref.type, ref.id, sub);
+  const rowsIn = await all(c.db, 'SELECT * FROM links WHERE b_type = ? AND b_id = ? AND b_sub IS ? ORDER BY id', ref.type, ref.id, sub);
+  const outs = rowsOut.map(l => ({ linkId: l.id, note: l.note || '', showIf: l.show_if || '', ref: cleanRef({ type: l.b_type, id: l.b_id, sub: l.b_sub }) }));
+  const ins = rowsIn.map(l => ({ linkId: l.id, note: l.note || '', showIf: l.show_if || '', ref: cleanRef({ type: l.a_type, id: l.a_id, sub: l.a_sub }) }));
+  if (ref.type === 'flow' && sub) {   // documents chosen at this step in the designer
+    const fl = await first(c.db, 'SELECT graph FROM flows WHERE id = ?', ref.id);
+    const node = fl && parse(fl.graph, { nodes: [] }).nodes.find(n => n.id === sub);
+    for (const did of (node && node.docIds) || []) outs.push({ linkId: null, derived: true, note: String((node.docSections || {})[did] || ''), showIf: '', ref: cleanRef({ type: 'document', id: did }) });
+  }
+  if (ref.type === 'document' && !sub) {   // steps that use this document
+    for (const fl of await all(c.db, "SELECT id, graph FROM flows WHERE status = 'active'")) for (const n of parse(fl.graph, { nodes: [] }).nodes) if ((n.docIds || []).map(Number).includes(ref.id)) ins.push({ linkId: null, derived: true, note: String((n.docSections || {})[ref.id] || ''), showIf: '', ref: cleanRef({ type: 'flow', id: fl.id, sub: n.id }) });
+  }
+  const m = await describeRefs(c, [...outs, ...ins].map(x => x.ref));
+  const build = (list, hide) => list.map(x => ({ ...m.get(refKey(x.ref)), linkId: x.linkId, derived: !!x.derived, note: x.note, showIf: x.showIf }))
+    .filter(x => (!x.gone || c.user.is_admin) && !(hide && x.showIf && !FB.expr.truthy(FB.expr.safe(x.showIf, vars, false))));
+  return { out: build(outs, !!vars), in: build(ins, false) };
+}
+
+/** Who may change a link: administrators, and the owner of a document at either end. */
+async function canEditLink(c, ...refs) {
+  if (c.user.is_admin) return true;
+  for (const r of refs) if (r.type === 'document' && await first(c.db, 'SELECT 1 FROM documents WHERE id = ? AND owner_id = ?', r.id, c.user.id)) return true;
+  return false;
+}
+
+route('GET', '/api/links', async (c) => {
+  const q = c.url.searchParams, ref = cleanRef({ type: q.get('type'), id: q.get('id'), sub: q.get('sub') });
+  if (!LINK_TYPES.includes(ref.type) || !Number.isInteger(ref.id)) throw new HttpError(400, 'Unknown item');
+  return { ...(await linksOf(c, ref)), canEdit: await canEditLink(c, ref) };
+});
+route('POST', '/api/links', async (c) => {
+  const b = await c.body(), a = cleanRef(b.a), t = cleanRef(b.b);
+  for (const r of [a, t]) {
+    if (!LINK_TYPES.includes(r.type) || !Number.isInteger(r.id)) throw new HttpError(400, 'Unknown item');
+    if (r.sub && r.type !== 'flow') throw new HttpError(400, 'Only a process has steps');
+  }
+  if (refKey(a) === refKey(t)) throw new HttpError(400, 'An item cannot be linked to itself');
+  if (!(await canEditLink(c, a, t))) throw new HttpError(403, 'Only an administrator or the owner of the document can link it');
+  const m = await describeRefs(c, [a, t]);
+  if (m.get(refKey(a)).gone || m.get(refKey(t)).gone) throw new HttpError(404, 'One of the two items does not exist');
+  const note = String(b.note || '').trim().slice(0, 120), showIf = String(b.showIf || '').trim().slice(0, 300);
+  if (showIf) { const er = FB.expr.check(showIf); if (er) throw new HttpError(400, 'Condition: ' + er); }
+  if (await first(c.db, 'SELECT 1 FROM links WHERE a_type = ? AND a_id = ? AND a_sub IS ? AND b_type = ? AND b_id = ? AND b_sub IS ?', a.type, a.id, a.sub, t.type, t.id, t.sub)) throw new HttpError(409, 'These two are already linked');
+  if ((await first(c.db, 'SELECT count(*) AS n FROM links WHERE a_type = ? AND a_id = ?', a.type, a.id)).n >= 200) throw new HttpError(400, 'Too many links on one item');
+  const id = await run(c.db, 'INSERT INTO links(a_type, a_id, a_sub, b_type, b_id, b_sub, note, show_if, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', a.type, a.id, a.sub, t.type, t.id, t.sub, note || null, showIf || null, c.user.id, now());
+  await logAudit(c, 'linked', a.type, a.id, m.get(refKey(a)).label, '→ ' + m.get(refKey(t)).label + (note ? ' (' + note + ')' : ''));
+  return { id };
+});
+route('DELETE', '/api/links/:id', async (c, { id }) => {
+  const l = await first(c.db, 'SELECT * FROM links WHERE id = ?', Number(id));
+  if (!l) throw new HttpError(404, 'Link not found');
+  const a = cleanRef({ type: l.a_type, id: l.a_id, sub: l.a_sub }), t = cleanRef({ type: l.b_type, id: l.b_id, sub: l.b_sub });
+  if (!(await canEditLink(c, a, t))) throw new HttpError(403, 'Only an administrator or the owner of the document can remove this link');
+  await run(c.db, 'DELETE FROM links WHERE id = ?', l.id);
+  return { ok: true };
+});
+/** Pick something to link: documents and photos, objects of any class, processes (with their steps). */
+route('GET', '/api/link-search', async (c) => {
+  const type = c.url.searchParams.get('type') || '', qq = (c.url.searchParams.get('q') || '').trim(), pat = likePattern(qq), D = await c.dir(), results = [];
+  if (!type || type === 'document') {
+    const rows = await all(c.db, `SELECT d.id, d.name, d.kind, f.id AS file_id, f.mime FROM documents d LEFT JOIN document_versions v ON v.document_id = d.id AND v.version = d.version LEFT JOIN files f ON f.id = v.file_id
+      WHERE d.status = 'active' ${qq ? "AND (d.name LIKE ?1 ESCAPE '\\' OR d.description LIKE ?1 ESCAPE '\\' OR d.folder LIKE ?1 ESCAPE '\\')" : ''} ORDER BY d.name LIMIT 12`, ...(qq ? [pat] : []));
+    for (const d of rows) results.push({ type: 'document', id: d.id, label: d.name, kind: DOC_KIND_LABEL[d.kind] || 'Document', image: d.mime && /^image\//.test(d.mime) ? d.file_id : null });
+  }
+  if (!type || type === 'object') {
+    for (const form of (await c.forms()).filter(f => f.is_class && f.status !== 'archived' && canViewForm(c.user, D, f))) {
+      const rows = await all(c.db, `SELECT id, data FROM submissions WHERE form_id = ?1 ${qq ? "AND data LIKE ?2 ESCAPE '\\'" : ''} ORDER BY id DESC LIMIT 8`, form.id, ...(qq ? [pat] : []));
+      for (const r of rows) results.push({ type: 'object', id: r.id, label: recordLabel(form, r.id, parse(r.data, {})), kind: form.name });
+    }
+  }
+  if (!type || type === 'flow') {
+    for (const f of await all(c.db, `SELECT id, name, graph FROM flows WHERE status = 'active' ${qq ? "AND name LIKE ?1 ESCAPE '\\'" : ''} ORDER BY name LIMIT 12`, ...(qq ? [pat] : []))) {
+      results.push({ type: 'flow', id: f.id, label: f.name, kind: 'Process', steps: parse(f.graph, { nodes: [] }).nodes.filter(n => !['start', 'end'].includes(n.type)).map(n => ({ id: n.id, name: n.name })) });
+    }
+  }
+  return { results: results.slice(0, 40) };
 });

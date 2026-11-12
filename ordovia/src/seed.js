@@ -4,6 +4,9 @@
 import { FB, lit, slugify, hashPassword, makeDirectory, recordLabel, formViewSQL } from './lib.js';
 import { advance, startNode, mergeFormData } from './engine.js';
 
+// a small drawing of a torque wrench (PNG), the example's "photo"
+const WRENCH_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAPAAAACWCAIAAABvmpKCAAACoElEQVR42u3dsU3DQBiGYU+TMgNkgAyQFbITdUSRMqKAjjlo6KgRYgRKJArk2He+8+dHeiu63P/ICbLvPLy9f0gxDZZAQEtAS0BLQAtoCWgJaAloCWgBLQEtAS0BLQEtoCWgJaAloCWgBbQEtAS0BLQEtICWgJaAloCWgBbQEtAS0BLQEtACWgJaAloCWkCvtOPpbH5aH+jj6Xxv5gp0gmOyNaRSxhroNMdkA52smWmgoyhjDXSmZqaBTtPMNNBRlLEGOlMz00CnaWYa6C5A7/YHoNUS9Ey+Y2Ia6K41j3RcSjYQQNfSPJnyTNZMAF0edBHN00wzAXS/mpkGuqXm4pQnsyYD6Lmgq2q+1zQZQAOt38aMY32gu9LMNNALgZ5Gc+SqTTYNJdDVNc9cQaaB7gV0wXUcD/rh8VnT2ijospqLm+YS6PKX50rfdy7SQDcAXe83HNBAL/17o/b/JcuA/vz67jagNwd6fj2Drvepga7yaXsDvdsf/pBq+xeggQYaaKCBBhpooHsB3YnmTkwD7QrtCg000EADDTTQQAPtxgrQ7hQCDXQG6G3mabtOn7ZbbLPjBvM8dIPnobEDOmfHCnNAR+0ptNfVJlm7vuVcDudyAO3kJCcnAe1sO5od1gi0gHY+tJzg7wR/rQG0d6xo66C9BUtdg/aeQqWB9iZZpYH2rm8BvVAoAJ1jmgOgc0xDAHQIa+MHOse02QOdY9rggQ5hbeRA55g2b6ATZBsz0CGsDRjoBNnmCvT6AldRoCWgBbQEtNQG9NPLqxRTM9CX6026XG9AC2igBTTQAhpoAS2ggRbQQAtoyY0VCWgJaAloAS0BLQEtAS0BLaAloCWgJaAFtFUQ0BLQEtAS0AJaAloCWgJaAlpAS0BLQEtAS//2A9LFgIXs849bAAAAAElFTkSuQmCC';
+
 export const DEMO_PASSWORD = 'demo1234';
 export const DEMO_ADMIN = { name: 'Demo Admin', email: 'demo@example.com' };
 
@@ -11,13 +14,13 @@ export const DEMO_ADMIN = { name: 'Demo Admin', email: 'demo@example.com' };
 export async function resetDemo(db, bucket) {
   if (bucket) { try { let cur; do { const l = await bucket.list({ cursor: cur, limit: 500 }); if (l.objects.length) await bucket.delete(l.objects.map(o => o.key)); cur = l.truncated ? l.cursor : null; } while (cur); } catch (e) { console.warn('bucket clean failed', e.message); } }
   const views = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'view' AND name LIKE 'form\\_%' ESCAPE '\\'").all()).results;
-  const order = ['audit', 'document_versions', 'documents', 'files', 'flow_versions', 'events', 'tasks', 'submissions', 'instances', 'dashboards', 'flows', 'forms', 'api_tokens', 'person_tags', 'tags', 'sessions', 'areas', 'persons', 'settings'];
+  const order = ['links', 'audit', 'document_versions', 'documents', 'files', 'flow_versions', 'events', 'tasks', 'submissions', 'instances', 'dashboards', 'flows', 'forms', 'api_tokens', 'person_tags', 'tags', 'sessions', 'areas', 'persons', 'settings'];
   await db.batch([...views.map(v => db.prepare('DROP VIEW IF EXISTS "' + v.name + '"')), ...order.map(t => db.prepare('DELETE FROM ' + t))]);
   return seedDemo(db, { ...DEMO_ADMIN, hash: await hashPassword(DEMO_PASSWORD) }, bucket);
 }
 
 export async function seedDemo(db, admin, bucket) {
-  const M = { files: [], documents: [], document_versions: [], flow_versions: [], areas: [], settings: [], persons: [], tags: [], person_tags: [], forms: [], flows: [], instances: [], tasks: [], submissions: [], events: [], dashboards: [] };
+  const M = { links: [], files: [], documents: [], document_versions: [], flow_versions: [], areas: [], settings: [], persons: [], tags: [], person_tags: [], forms: [], flows: [], instances: [], tasks: [], submissions: [], events: [], dashboards: [] };
   const nextId = {}; const id = (t) => (nextId[t] = (nextId[t] || 0) + 1);
   let clock = Date.now();
   const at = () => new Date(clock).toISOString().slice(0, 19).replace('T', ' ');
@@ -388,6 +391,30 @@ export async function seedDemo(db, admin, bucket) {
     if (d.link.length) { const fl = M.flows.find(x => x.name === d.link[0]); const g = typeof fl.graph === 'string' ? JSON.parse(fl.graph) : fl.graph; const nd = g.nodes.find(n => n.name === d.link[1]); if (nd) { nd.docIds = (nd.docIds || []).concat(did); if (d.link[2]) nd.docSections = { ...(nd.docSections || {}), [did]: d.link[2] }; fl.graph = g; } }
   }
 
+  // a photo of a tool, as a document of kind photo (a small drawing, standing in for a real photo)
+  {
+    const pid = id('documents'), fid = id('files'), key = 'seed/torque-wrench-photo';
+    const bytes = Uint8Array.from(atob(WRENCH_PNG), ch => ch.charCodeAt(0));
+    if (bucket) await bucket.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+    M.files.push({ id: fid, key, name: 'torque-wrench.png', mime: 'image/png', size: bytes.length, uploaded_by: P.daan, created_at: at(), attached_at: at() });
+    M.documents.push({ id: pid, name: 'Torque wrench set (photo)', kind: 'photo', description: 'Front view with the scale window, for recognising the right tool.', area_id: A.ops, folder: 'Equipment / Photos', owner_id: P.daan, status: 'active', version: 1, review_months: 24, reviewed_at: at(), created_at: at(), updated_at: at() });
+    M.document_versions.push({ id: id('document_versions'), document_id: pid, version: 1, file_id: fid, note: 'First version', uploaded_by: P.daan, uploaded_at: at() });
+  }
+  // links: anything to anything. A step needs a document (with the chapter, sometimes only when a formula is true); a machine has its photo and its procedure.
+  {
+    const docId = (name) => M.documents.find(d => d.name === name).id;
+    const node = (flowName, nodeName) => { const fl = M.flows.find(x => x.name === flowName); const g = typeof fl.graph === 'string' ? JSON.parse(fl.graph) : fl.graph; return [fl.id, g.nodes.find(n => n.name === nodeName).id]; };
+    const link = (a, b, note, showIf) => M.links.push({ id: id('links'), a_type: a[0], a_id: a[1], a_sub: a[2] || null, b_type: b[0], b_id: b[1], b_sub: b[2] || null, note: note || null, show_if: showIf || null, created_by: P.admin, created_at: at() });
+    const [pf, finNode] = node('Purchase request', 'Finance approval');
+    link(['flow', pf, finNode], ['document', docId('Purchasing norm: approval limits')], 'Above EUR 1,000: both approvals', 'total_incl > 1000');
+    const [cf, calNode] = node('Machine calibration', 'Calibrate');
+    link(['flow', cf, calNode], ['document', docId('Torque wrench set (photo)')], 'Recognise the tool', 'subject.machine_id == "M-003"');
+    const machine = (code) => M.submissions.find(x => x.form_id === machineForm && x.data.machine_id === code).id;
+    link(['object', machine('M-003')], ['document', docId('Torque wrench set (photo)')], 'Front view');
+    link(['object', machine('M-003')], ['document', docId('Calibration procedure')], 'Section 2: tolerances');
+    link(['object', machine('M-001')], ['document', docId('Calibration procedure')], 'Section 2: tolerances');
+  }
+
   M.settings.push({ key: 'demo', value: '1' });
   M.settings.push({ key: 'person_fields', value: JSON.stringify([
     { key: 'job_title', label: 'Job title', type: 'select', options: ['Operator', 'Metrologist', 'Quality engineer', 'Sales', 'Finance', 'HR', 'Manager'] },
@@ -416,6 +443,7 @@ export async function seedDemo(db, admin, bucket) {
     events: ['id', 'instance_id', 'person_id', 'message', 'created_at'],
     flow_versions: ['id', 'flow_id', 'version', 'name', 'graph', 'doc', 'saved_at', 'saved_by'],
     files: ['id', 'key', 'name', 'mime', 'size', 'uploaded_by', 'created_at', 'attached_at'],
+    links: ['id', 'a_type', 'a_id', 'a_sub', 'b_type', 'b_id', 'b_sub', 'note', 'show_if', 'created_by', 'created_at'],
     documents: ['id', 'name', 'kind', 'description', 'area_id', 'folder', 'owner_id', 'status', 'version', 'review_months', 'reviewed_at', 'created_at', 'updated_at'],
     document_versions: ['id', 'document_id', 'version', 'file_id', 'note', 'uploaded_by', 'uploaded_at'],
     dashboards: ['id', 'name', 'widgets', 'access', 'area_id', 'status', 'owner_id', 'updated_at'],
