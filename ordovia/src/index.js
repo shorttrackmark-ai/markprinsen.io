@@ -357,9 +357,26 @@ function attachStatements(c, form, data, instanceId) {
     c.db.prepare('UPDATE files SET attached_at = COALESCE(attached_at, ?), form_id = ?, instance_id = COALESCE(?, instance_id) WHERE id = ?').bind(now(), form.id, instanceId ?? null, data[f.key]));
 }
 
+/** One plain sentence: what happens once this step is done (who gets the next task, or that the process ends). */
+function afterwards(graph, nodeId, D) {
+  const byId = Object.fromEntries(graph.nodes.map(n => [n.id, n]));
+  let id = nodeId;
+  for (let hop = 0; hop < 6; hop++) {
+    const out = graph.edges.filter(e => e.from === id);
+    if (!out.length) return '';
+    if (out.length > 1) return 'The process continues depending on what you fill in.';
+    const n = byId[out[0].to];
+    if (!n) return '';
+    if (n.type === 'task') return `Next: “${n.name}” – ${D.describe(n.assignee || { type: 'initiator' })}.`;
+    if (n.type === 'end') return `After this the process is finished: ${n.name}.`;
+    if (n.type === 'decision') return 'The process continues depending on the outcome.';
+    id = n.id;
+  }
+  return '';
+}
 route('GET', '/api/tasks/:id', async (c, { id }) => {
-  const t = await first(c.db, `SELECT t.*, i.vars, i.title AS process, i.started_by, i.graph, i.id AS iid, i.flow_id, i.status AS istatus
-    FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE t.id = ?`, Number(id));
+  const t = await first(c.db, `SELECT t.*, i.vars, i.title AS process, i.started_by, i.graph, i.id AS iid, i.flow_id, i.status AS istatus, i.created_at AS started_at, sp.name AS starter
+    FROM tasks t JOIN instances i ON i.id = t.instance_id LEFT JOIN persons sp ON sp.id = i.started_by WHERE t.id = ?`, Number(id));
   if (!t) throw new HttpError(404, 'Task not found');
   const inst = { id: t.iid, started_by: t.started_by, vars: t.vars };
   if (!(await canSeeInstance(c, inst))) throw new HttpError(403, 'Not your task');
@@ -371,6 +388,8 @@ route('GET', '/api/tasks/:id', async (c, { id }) => {
   return {
     task: { id: t.id, name: t.name, status: t.status, form_id: t.form_id, created_at: t.created_at, due_at: t.due_at, completed_at: t.completed_at, instance_id: t.iid, process: t.process },
     instructions: node.instructions || '',
+    afterwards: t.status === 'open' ? afterwards(parse(t.graph, { nodes: [], edges: [] }), t.node_id, D) : '',
+    case: { id: t.iid, title: t.process, starter: t.starter || '', started_at: t.started_at },
     documents: await docsByIds(c, node.docIds, node.docSections || {}),
     links: (await linksOf(c, { type: 'flow', id: t.flow_id, sub: t.node_id }, parse(t.vars, {}))).out.filter(x => !x.derived),
     assignee: D.describe(parse(t.assignee, {})),

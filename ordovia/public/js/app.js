@@ -17,7 +17,7 @@
     $('#nav').innerHTML = `<div class="nav-group">
       ${link('#/', '▤', 'My tasks', null, m.openTasks)}
       ${link('#/areas', '◫', 'Areas', '/area')}
-      ${link('#/processes', '⟳', 'Runs', '/processes')}
+      ${link('#/processes', '⟳', 'Cases', '/processes')}
       ${link('#/handbook', '❖', 'Handbook', '/handbook')}
       ${link('#/objects', '◈', 'Objects', '/objects')}
       ${link('#/documents', '❏', 'Documents', '/documents')}
@@ -94,7 +94,7 @@
       <label>Your name<input name="name" required autocomplete="name"></label>
       <label>E-mail<input name="email" type="email" required autocomplete="username"></label>
       <label>Password <small class="muted">(at least 8 characters)</small><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
-      <label class="check"><input type="checkbox" name="demo" checked><span>Fill with demo data (colleagues, forms, processes, dashboard)</span></label>
+      <label class="check"><input type="checkbox" name="demo"><span>Add the example company (colleagues, forms, processes, dashboard) so I can explore – leave unticked for a clean start</span></label>
       <button class="btn primary block">Create workspace</button>${exampleButton()}</form></div>`;
     wireExample(main);
     const f = $('#setupForm');
@@ -108,19 +108,41 @@
     };
   };
 
+  /** "due in 2 days", "due today", "overdue 3 days" – what a person needs to know, not a timestamp. */
+  const dueText = (iso) => {
+    if (!iso) return '';
+    const d = Math.round((Date.parse(String(iso).replace(' ', 'T') + 'Z') - Date.now()) / 86400000);
+    return d < 0 ? `overdue ${-d} day${d === -1 ? '' : 's'}` : d === 0 ? 'due today' : `due in ${d} day${d === 1 ? '' : 's'}`;
+  };
+  FB.dueText = dueText;
+
   // ---------------- my tasks ----------------
   FB.route('/', async (main) => {
     const u = FB.state.user;
     const h = await api.get('/home');
-    main.innerHTML = `<div class="page"><div class="page-head"><h1>Hi ${esc(u.name.split(' ')[0])}</h1></div>
-      <section><h2>Start a process</h2>${FB.org.group(h.flows, f => f.area_id).map(g => `<div class="start-area">${g.area ? `<div class="start-area-head"><a href="#/area/${g.area.id}">${FB.org.chip(g.area.id)}</a></div>` : ''}<div class="start-grid">${g.items.map(f => `<button class="card start-card" data-start="${f.id}"><b>${esc(f.name)} ${FB.org.status(f.status)}</b><span class="muted small">${esc(f.description || '')}</span></button>`).join('')}</div></div>`).join('') || '<p class="muted">No processes available for you.</p>'}</section>
-      <section><h2>Open tasks <span class="count">${h.tasks.length}</span></h2>
+    const late = h.tasks.filter(t => t.overdue).length;
+    main.innerHTML = `<div class="page"><div class="page-head"><div><h1>Hi ${esc(u.name.split(' ')[0])}</h1>
+      <p class="muted">${h.tasks.length ? `You have <b>${h.tasks.length}</b> task${h.tasks.length === 1 ? '' : 's'} waiting${late ? `, <span class="danger-text">${late} overdue</span>` : ''}.` : 'Nothing is waiting for you.'}</p></div></div>
+      ${FB.isAdmin() && !h.flows.length ? `<section class="card getting-started"><h2>Let's set up your first process</h2>
+        <ol class="gs-steps"><li><b>Departments.</b> Group everything by who it belongs to. <button class="btn small" id="gsAreas">Add typical departments</button> <a class="btn small ghost" href="#/admin/areas">Or create your own</a></li>
+        <li><b>People.</b> Add your colleagues and give them tags (department, function) so tasks reach the right person. <a class="btn small" href="#/admin/people">Add people</a></li>
+        <li><b>A process.</b> Draw the steps, say who does each one and what they fill in. <a class="btn small primary" href="#/admin/flows">Build a process</a></li></ol>
+        ${FB.state.settings.canTryExample ? '<p class="small muted">Rather look around first? Use <b>Try the example</b> on the sign-in screen: a company with working processes.</p>' : ''}</section>` : ''}
+      <section><h2>Your tasks <span class="count">${h.tasks.length}</span></h2>
       ${h.tasks.length ? `<div class="task-list">${h.tasks.map(t => `<a class="card task-row ${t.overdue ? 'overdue' : ''}" href="#/task/${t.id}">
-        <div><b>${esc(t.name)}</b><div class="muted small">${esc(t.process)} · ${esc(t.flow)}</div></div>
-        <div class="muted small right">${t.due_at ? `<span class="${t.overdue ? 'danger-text' : ''}">${t.overdue ? 'Overdue' : 'Due'} ${esc(fmtDate(t.due_at))}</span><br>` : esc(fmtDate(t.created_at)) + '<br>'}${esc(t.assignee)}</div></a>`).join('')}</div>`
-        : '<div class="empty-state card"><p>Nothing to do right now.</p></div>'}</section>
-      <section><h2>Recently started by me</h2>${h.mine.length ? table({ columns: ['Process', 'Status', 'Outcome', 'Started'], values: h.mine.map(i => [i.title, i.status, i.outcome, fmtDate(i.created_at)]) }, { rowAttr: (r, i) => `data-href="#/processes/${h.mine[i].id}" class="clickable"` }) : '<p class="muted">None yet.</p>'}</section></div>`;
-    $$('[data-start]', main).forEach(b => b.onclick = () => FB.org.start(h.flows.find(f => f.id === Number(b.dataset.start)), b));
+        <div><b>${esc(t.name)}</b><div class="muted small">${esc(t.process)}</div></div>
+        <div class="right small">${t.due_at ? `<span class="${t.overdue ? 'danger-text' : 'muted'}">${esc(dueText(t.due_at))}</span>` : `<span class="muted">${esc(fmtDate(t.created_at))}</span>`}</div></a>`).join('')}</div>`
+        : '<div class="empty-state card"><p>All done. New tasks show up here the moment a process needs you.</p></div>'}</section>
+      <section><h2>Start a process</h2>${h.flows.length > 6 ? '<div class="filters"><input type="search" id="stQ" placeholder="Find a process…"></div>' : ''}<div id="stList"></div></section>
+      <section><h2>Your recent cases</h2>${h.mine.length ? table({ columns: ['Case', 'Status', 'Outcome', 'Started'], values: h.mine.map(i => [i.title, i.status, i.outcome, fmtDate(i.created_at)]) }, { rowAttr: (r, i) => `data-href="#/processes/${h.mine[i].id}" class="clickable"` }) : '<p class="muted">None yet.</p>'}</section></div>`;
+    const drawStart = (q) => {
+      const shown = h.flows.filter(f => !q || (f.name + ' ' + (f.description || '')).toLowerCase().includes(q.toLowerCase()));
+      $('#stList', main).innerHTML = FB.org.group(shown, f => f.area_id).map(g => `<div class="start-area">${g.area ? `<div class="start-area-head"><a href="#/area/${g.area.id}">${FB.org.chip(g.area.id)}</a></div>` : ''}<div class="start-grid">${g.items.map(f => `<button class="card start-card" data-start="${f.id}"><b>${esc(f.name)} ${FB.org.status(f.status)}</b><span class="muted small">${esc(f.description || '')}</span></button>`).join('')}</div></div>`).join('') || (q ? '<p class="muted">No process matches.</p>' : '<p class="muted">No process to start yet.</p>');
+      $$('[data-start]', main).forEach(b => b.onclick = () => FB.org.start(h.flows.find(f => f.id === Number(b.dataset.start)), b));
+    };
+    drawStart('');
+    const stq = $('#stQ', main); if (stq) stq.oninput = () => drawStart(stq.value);
+    const gsA = $('#gsAreas', main); if (gsA) gsA.onclick = async () => { try { await api.post('/admin/areas/starter'); await FB.loadMeta(); toast('Departments added', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); } };
     clickableRows(main);
   });
   function clickableRows(root) { $$('tr[data-href]', root).forEach(r => r.onclick = () => FB.go(r.dataset.href)); }
@@ -131,12 +153,12 @@
     const d = await api.get('/tasks/' + Number(id));
     const t = d.task, form = t.form_id ? formById(t.form_id) : null;
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/processes/${t.instance_id}">← ${esc(t.process)}</a><h1>${esc(t.name)}</h1>
-      ${t.due_at ? `<p class="muted small">Due ${esc(fmtDate(t.due_at))}</p>` : ''}</div><span class="status s-${esc(t.status)}">${esc(t.status)}</span></div>
+      <p class="muted small">${t.status === 'open' && t.due_at ? `<span class="${t.due_at < new Date().toISOString().slice(0, 19).replace('T', ' ') ? 'danger-text' : ''}">${esc(dueText(t.due_at))}</span> · ` : ''}for ${d.canComplete ? 'you' : esc(d.assignee)}</p></div><span class="status s-${esc(t.status)}">${esc(t.status)}</span></div>
       ${d.instructions ? `<div class="card instructions"><h4>Work instruction</h4><p>${richText(d.instructions)}</p></div>` : ''}
       ${(d.documents || []).length ? `<div class="card instructions"><h4>Documents for this step</h4>${FB.org.docLinks(d.documents)}</div>` : ''}
       ${(d.links || []).length ? `<div class="card instructions"><h4>Linked at this step</h4>${FB.org.linkList(d.links)}</div>` : ''}
       <div class="two-col"><div class="card" id="taskForm"></div>
-      <aside>${d.previous.length ? `<h3>Earlier in this process</h3>${d.previous.map(s => { const f = formById(s.form_id); return f ? `<div class="card prev"><div class="muted small">${esc(s.task_name || f.name)} · ${esc(s.who || 'automatic')} · ${esc(fmtDate(s.created_at))}</div>${FB.forms.summary(f, s.data)}</div>` : ''; }).join('')}` : '<p class="muted">This is the first step.</p>'}</aside></div></div>`;
+      <aside>${d.previous.length ? `<h3>Earlier in this case</h3>${d.previous.map(s => { const f = formById(s.form_id); return f ? `<div class="card prev"><div class="muted small">${esc(s.task_name || f.name)} · ${esc(s.who || 'automatic')} · ${esc(fmtDate(s.created_at))}</div>${FB.forms.summary(f, s.data)}</div>` : ''; }).join('')}` : `<h3>This case</h3><div class="card prev"><div class="small">Started${d.case.starter ? ' by <b>' + esc(d.case.starter) + '</b>' : ''} on ${esc(fmtDate(d.case.started_at))}</div><div class="small"><a href="#/processes/${d.case.id}">Open the whole case</a></div></div>`}</aside></div></div>`;
     const box = $('#taskForm', main);
     if (t.status !== 'open') { box.innerHTML = `<p class="muted">Completed ${esc(fmtDate(t.completed_at))}.</p>${d.submission && form ? FB.forms.summary(form, d.submission.data) : ''}`; return; }
     if (!d.canComplete) { box.innerHTML = `<p>This task is assigned to: <b>${esc(d.assignee)}</b>.</p>`; return; }
@@ -148,17 +170,29 @@
     if (!form) { box.innerHTML = '<p>This task has no form.</p><button class="btn primary" id="done">Mark as done</button>'; $('#done', box).onclick = () => complete({}).catch(e => toast(e.message, 'error')); return; }
     if (form.description) box.insertAdjacentHTML('beforeend', `<p class="muted">${esc(form.description)}</p>`);
     await FB.forms.open(box, form, { context: d.vars, submitLabel: 'Complete task', onSubmit: complete });
+    if (d.afterwards) box.insertAdjacentHTML('beforeend', `<p class="muted small next-hint">${esc(d.afterwards)}</p>`);
   });
 
   // ---------------- processes ----------------
   FB.route('/processes', async (main) => {
     const status = FB.query().get('status') || '';
     const rows = await api.get('/instances' + (status ? '?status=' + encodeURIComponent(status) : ''));
-    main.innerHTML = `<div class="page"><div class="page-head"><h1>Processes</h1>
+    main.innerHTML = `<div class="page page-wide"><div class="page-head"><div><h1>Cases</h1><p class="muted">Every time someone starts a process, a case is created. Here you can follow each one.</p></div>
       <div class="seg">${['', 'running', 'done', 'stuck'].map(s => `<button class="${s === status ? 'on' : ''}" data-s="${s}">${s || 'all'}</button>`).join('')}</div></div>
-      ${table({ columns: ['#', 'Process', 'Flow', 'Status', 'Outcome', 'Started by', 'Started', 'Hours'], values: rows.map(r => [r.id, r.title, r.flow, r.status, r.outcome, r.started_by, fmtDate(r.created_at), r.hours]) }, { rowAttr: (r) => `data-href="#/processes/${r[0]}" class="clickable"` })}</div>`;
+      <div class="filters"><input type="search" id="csQ" placeholder="Search cases…"></div><div id="csList"></div></div>`;
+    const dur = (h) => (h == null ? '–' : h < 1 ? '< 1 h' : h < 48 ? Math.round(h) + ' h' : Math.round(h / 24) + ' days');
+    const draw = (q) => FB.org.register($('#csList', main), rows.filter(r => !q || [r.title, r.flow, r.outcome, r.started_by, r.status].join(' ').toLowerCase().includes(q.toLowerCase())), [
+      { label: 'Case', cell: r => `<a href="#/processes/${r.id}"><b>${esc(r.title)}</b></a>`, sort: r => r.title.toLowerCase() },
+      { label: 'Process', cell: r => esc(r.flow), sort: r => r.flow },
+      { label: 'Status', cell: r => `<span class="status s-${esc(r.status)}">${esc(r.status)}</span>`, sort: r => r.status },
+      { label: 'Outcome', cell: r => esc(r.outcome || '–'), sort: r => r.outcome || '' },
+      { label: 'Started by', cell: r => esc(r.started_by || '–'), sort: r => r.started_by || '' },
+      { label: 'Started', cell: r => esc(fmtDate(r.created_at)), sort: r => r.created_at },
+      { label: 'Duration', cell: r => dur(r.hours), sort: r => (r.hours == null ? -1 : r.hours), cls: 'num' },
+    ], { href: r => '#/processes/' + r.id, empty: 'No cases yet. Start a process from My tasks.', one: 'case', many: 'cases', total: rows.length });
+    draw('');
+    $('#csQ', main).oninput = (e) => draw(e.target.value);
     $$('[data-s]', main).forEach(b => b.onclick = () => { location.hash = '#/processes' + (b.dataset.s ? '?status=' + b.dataset.s : ''); });
-    clickableRows(main);
   });
 
   FB.route('/processes/:id', async (main, { id }) => {
@@ -166,7 +200,7 @@
     const inst = d.instance;
     const done = new Set(d.tasks.filter(t => t.status === 'done').map(t => t.node_id));
     const open = new Set(d.tasks.filter(t => t.status === 'open').map(t => t.node_id));
-    main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/processes">← Processes</a><h1>${esc(inst.title)}</h1>
+    main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/processes">← Cases</a><h1>${esc(inst.title)}</h1>
       <p class="muted">${esc(inst.flow)}${d.subject ? ` · about <a href="#/objects/${d.subject.formId}/${d.subject.id}">${esc(d.subject.form)}: ${esc(d.subject.label)}</a>` : ''} · started by ${esc(inst.started_by || '?')} · ${esc(fmtDate(inst.created_at))}</p></div>
       <div class="actions"><span class="status s-${esc(inst.status)}">${esc(inst.status)}${inst.outcome ? ' · ' + esc(inst.outcome) : ''}</span>
       ${FB.isAdmin() ? '<button class="btn danger ghost small" id="pDel">Delete</button>' : ''}</div></div>

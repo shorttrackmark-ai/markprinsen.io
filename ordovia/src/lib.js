@@ -124,7 +124,7 @@ export function makeDirectory(personRows, tagRows, ptRows) {
         case 'initiator': return 'The person who started the process';
         case 'person': return (persons.get(Number(rule.personId)) || { name: 'Unknown person' }).name;
         case 'field': return `Person chosen in “${rule.field}”`;
-        case 'attr': return `${rule.label || rule.key}: ${rule.value}`;
+        case 'attr': return `Anyone with ${String(rule.label || rule.key).toLowerCase()} “${rule.value}”`;
         case 'tags': {
           const parts = (rule.tagIds || []).map(id => { const x = tags.get(Number(id)); return x ? `${x.category}: ${x.value}` : '?'; });
           return parts.concat((rule.sameAs || []).map(c => `same ${c} as initiator`)).join(' + ') || 'Anyone';

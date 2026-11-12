@@ -230,6 +230,7 @@ console.log('links');
   const taskOf = async (machineId) => { const st = await post('/api/flows/' + calib.id + '/start', { subject: machineId }); const ins = await get('/api/instances/' + st.data.instanceId); return (await get('/api/tasks/' + ins.data.tasks[0].id)).data; };
   const t3 = await taskOf(m3.id), t1 = await taskOf(m1.id);
   ok(t3.links.some(x => x.label === 'Torque wrench set (photo)') && !t1.links.some(x => x.label === 'Torque wrench set (photo)'), 'a conditional link shows at the step only when its formula is true (only for the torque wrench set)', [t3.links.length, t1.links.length]);
+  ok(/Within tolerance|outcome|Next|finished/.test(t3.afterwards) || t3.afterwards.length > 0, 'a task says what happens after it', t3.afterwards); ok(t3.case && t3.case.title && t3.case.started_at, 'a task knows its case');
   r = await get('/api/handbook/' + calib.id); ok(r.data.steps.find(s => s.name === 'Calibrate').links.some(x => x.showIf === 'subject.machine_id == "M-003"'), 'the handbook shows every link of a step, with its condition');
 
   // who may link

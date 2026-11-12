@@ -105,7 +105,12 @@
       return;
     }
     const form = flow.form_id ? FB.state.meta.forms.find(f => f.id === Number(flow.form_id)) : null;
-    if (!form) return startFlow(flow.id, btn, subject);
+    if (!form) {   // no request form: starting makes a case and gives you the first step, so ask first (no empty cases by accident)
+      const m = modal(flow.name, `<p>${esc(flow.description || '')}</p><p class="muted">Starting creates a new case and takes you to the first step.</p><div class="form-actions"><button type="button" class="btn ghost" id="stNo">Cancel</button><button type="button" class="btn primary" id="stYes">Start</button></div>`);
+      $('#stNo', m.root).onclick = m.close;
+      $('#stYes', m.root).onclick = () => { m.close(); startFlow(flow.id, btn, subject); };
+      return;
+    }
     const box = document.createElement('div');
     const m = modal(flow.name, box, { wide: true });
     FB.forms.open(box, form, { context: { initiator: FB.profileOf(FB.state.user.id) }, submitLabel: 'Submit request', onCancel: m.close,
