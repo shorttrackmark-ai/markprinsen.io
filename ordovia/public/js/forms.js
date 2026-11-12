@@ -8,7 +8,7 @@
     text: { label: 'Text', icon: 'Aa' }, textarea: { label: 'Long text', icon: '¶' }, number: { label: 'Number', icon: '#' },
     email: { label: 'E-mail', icon: '@' }, date: { label: 'Date', icon: '▦' }, select: { label: 'Dropdown', icon: '▾' },
     radio: { label: 'Choice', icon: '◉' }, checkbox: { label: 'Yes / no', icon: '☑' }, person: { label: 'Person', icon: '☺' },
-    record: { label: 'Link to record', icon: '⛓' }, file: { label: 'File upload', icon: '📎' }, calc: { label: 'Calculation', icon: 'ƒ' }, heading: { label: 'Section heading', icon: 'H' },
+    record: { label: 'Link to record', icon: '⛓' }, file: { label: 'File upload', icon: '+' }, calc: { label: 'Calculation', icon: 'ƒ' }, heading: { label: 'Section heading', icon: 'H' },
   };
   const Forms = { TYPES };
   FB.forms = Forms;

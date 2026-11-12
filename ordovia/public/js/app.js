@@ -117,7 +117,7 @@
       ${h.tasks.length ? `<div class="task-list">${h.tasks.map(t => `<a class="card task-row ${t.overdue ? 'overdue' : ''}" href="#/task/${t.id}">
         <div><b>${esc(t.name)}</b><div class="muted small">${esc(t.process)} · ${esc(t.flow)}</div></div>
         <div class="muted small right">${t.due_at ? `<span class="${t.overdue ? 'danger-text' : ''}">${t.overdue ? 'Overdue' : 'Due'} ${esc(fmtDate(t.due_at))}</span><br>` : esc(fmtDate(t.created_at)) + '<br>'}${esc(t.assignee)}</div></a>`).join('')}</div>`
-        : '<div class="empty-state card"><p>🎉 Nothing to do right now.</p></div>'}</section>
+        : '<div class="empty-state card"><p>Nothing to do right now.</p></div>'}</section>
       <section><h2>Recently started by me</h2>${h.mine.length ? table({ columns: ['Process', 'Status', 'Outcome', 'Started'], values: h.mine.map(i => [i.title, i.status, i.outcome, fmtDate(i.created_at)]) }, { rowAttr: (r, i) => `data-href="#/processes/${h.mine[i].id}" class="clickable"` }) : '<p class="muted">None yet.</p>'}</section></div>`;
     $$('[data-start]', main).forEach(b => b.onclick = () => FB.org.start(h.flows.find(f => f.id === Number(b.dataset.start)), b));
     clickableRows(main);

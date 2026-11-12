@@ -49,9 +49,9 @@ export async function seedDemo(db, admin, bucket) {
   // ---- areas: how everything is grouped (a department or domain that offers processes to the rest) ----
   const A = {};
   const area = (key, name, description, owner, color) => { const aid = id('areas'); M.areas.push({ id: aid, name, description, color, owner_id: P[owner], created_at: at() }); A[key] = aid; };
-  area('hr', 'People & HR', 'Leave, onboarding and everything about our people.', 'admin', '#7c3aed');
-  area('fin', 'Purchasing & Finance', 'Buying, suppliers and payments.', 'eva', '#0891b2');
-  area('ops', 'Operations & Quality', 'Incidents, corrective actions and day-to-day operations.', 'daan', '#ea580c');
+  area('hr', 'People & HR', 'Leave, onboarding and everything about our people.', 'admin', '#7a4e6d');
+  area('fin', 'Purchasing & Finance', 'Buying, suppliers and payments.', 'eva', '#3d5a80');
+  area('ops', 'Operations & Quality', 'Incidents, corrective actions and day-to-day operations.', 'daan', '#b4452a');
 
   // ---- forms ----
   const forms = new Map();

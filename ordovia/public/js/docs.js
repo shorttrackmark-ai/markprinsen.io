@@ -30,14 +30,14 @@
     const draw = () => {
       const shown = list.filter(d => FB.org.match(d, st, [d.name, d.description, d.owner, d.file_name, d.folder, kindLabel(d.kind)].join(' ')) && (!st.kind || d.kind === st.kind) && (!st.folder || (st.folder === '-' ? !d.folder : d.folder === st.folder || (d.folder || '').startsWith(st.folder + ' / '))));
       $('#dcList', main).innerHTML = FB.org.groupedCards(shown, d => d.area_id, d => `<a class="card link-card" href="#/documents/${d.id}"><h3>${esc(d.name)} ${FB.org.status(d.status)}</h3>
-        <p class="small muted">${d.folder ? '📁 ' + esc(d.folder) + ' · ' : ''}${esc(kindLabel(d.kind))} · v${d.version}${d.file_name ? ' · ' + esc(d.file_name) : ''}</p>
+        <p class="small muted">${d.folder ? 'Folder: ' + esc(d.folder) + ' · ' : ''}${esc(kindLabel(d.kind))} · v${d.version}${d.file_name ? ' · ' + esc(d.file_name) : ''}</p>
         <p class="muted small">${d.owner ? 'Owner: ' + esc(d.owner) : 'No owner'}${d.overdue ? ' · <span class="warn-text">review due</span>' : ''}</p></a>`, 'No documents match.');
     };
     FB.org.filters($('#dcFilters', main), st, { status: FB.isAdmin(), placeholder: 'Search documents…' }, draw);
     const kindSel = document.createElement('select'); kindSel.innerHTML = '<option value="">All kinds</option>' + KINDS.map(k => `<option value="${k[0]}">${esc(k[1])}</option>`).join('');
     kindSel.onchange = () => { st.kind = kindSel.value; draw(); }; $('.filters', main).appendChild(kindSel);
     if (folders.length) {
-      const folderSel = document.createElement('select'); folderSel.innerHTML = '<option value="">All folders</option>' + folders.map(x => `<option value="${esc(x)}">📁 ${esc(x)}</option>`).join('') + '<option value="-">Not in a folder</option>';
+      const folderSel = document.createElement('select'); folderSel.innerHTML = '<option value="">All folders</option>' + folders.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('') + '<option value="-">Not in a folder</option>';
       folderSel.onchange = () => { st.folder = folderSel.value; draw(); }; $('.filters', main).appendChild(folderSel);
     }
     FB.state.docFolders = folders;
@@ -75,7 +75,7 @@
     const d = await api.get('/documents/' + Number(id));
     const cur = d.versions[0];
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/documents">← Documents</a><h1>${esc(d.name)} ${FB.org.status(d.status)}</h1>
-      <p class="muted">${d.folder ? '📁 ' + esc(d.folder) + ' · ' : ''}${esc(kindLabel(d.kind))} · version ${d.version}${d.area ? ` · <a href="#/area/${d.area_id}">${esc(d.area)}</a>` : ''} · owner ${esc(d.owner || '–')}</p>
+      <p class="muted">${d.folder ? 'Folder: ' + esc(d.folder) + ' · ' : ''}${esc(kindLabel(d.kind))} · version ${d.version}${d.area ? ` · <a href="#/area/${d.area_id}">${esc(d.area)}</a>` : ''} · owner ${esc(d.owner || '–')}</p>
       ${d.reviewDue ? `<p class="small ${d.overdue ? 'warn-text' : 'muted'}">${d.overdue ? '⚠ Review was due' : 'Next review'} ${esc(d.reviewDue)}${d.reviewed_at ? ` · last reviewed ${esc(fmtDate(d.reviewed_at).slice(0, 10))}` : ''}</p>` : ''}</div>
       <div class="actions">${cur && cur.file_id ? `<a class="btn primary" href="/api/files/${cur.file_id}" target="_blank" rel="noopener">Open</a><a class="btn" href="/api/files/${cur.file_id}?download=1">Download</a>` : ''}
         ${d.canManage ? '<button class="btn" id="dvNew">Upload new version</button><button class="btn" id="dvReview">Mark as reviewed</button>' : ''}${FB.isAdmin() ? '<button class="btn ghost" id="dvEdit">Edit</button>' : ''}</div></div>

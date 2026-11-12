@@ -1114,7 +1114,7 @@ route('POST', '/api/admin/assign-area', async (c) => {
 // first-time help: the usual departments, so the workspace starts with a structure (only when there are no areas yet)
 route('POST', '/api/admin/areas/starter', async (c) => {
   if ((await first(c.db, 'SELECT count(*) AS n FROM areas')).n) throw new HttpError(409, 'There are areas already');
-  const starter = [['Finance', '#0891b2'], ['People & HR', '#7c3aed'], ['Sales', '#ea580c'], ['Operations', '#16a34a'], ['IT', '#64748b']];
+  const starter = [['Finance', '#3d5a80'], ['People & HR', '#7a4e6d'], ['Sales', '#c08a1c'], ['Operations', '#1e5b45'], ['IT', '#8a8678']];
   await c.db.batch(starter.map(([n, col]) => c.db.prepare('INSERT INTO areas(name, description, color, created_at) VALUES (?,?,?,?)').bind(n, '', col, now())));
   c.note('Starter areas', starter.map(x => x[0]).join(', '));
   return { ok: true };
