@@ -265,7 +265,7 @@
     main.innerHTML = `<div class="page handbook"><div class="page-head"><div><a class="crumb" href="#/handbook">← Handbook</a><h1>${esc(h.name)}</h1>
       <p class="muted">${h.area ? `<a href="#/area/${h.area_id}">${esc(h.area)}</a> · ` : ''}Version ${h.version} · last changed ${esc(fmtDate(h.updated_at))}${h.stats && h.stats.runs ? ` · ${h.stats.runs} runs, avg. ${h.stats.avg_hours ?? '–'} h` : ''} ${FB.org.status(h.status)}</p>
       ${h.reviewDue ? `<p class="small ${h.overdue ? 'warn-text' : 'muted'}">${h.overdue ? '⚠ Review was due' : 'Next review'} ${esc(h.reviewDue)}${h.reviewedAt ? ` · last reviewed ${esc(fmtDate(h.reviewedAt).slice(0, 10))}` : ''}</p>` : ''}</div>
-      <div class="actions">${h.canReview ? '<button class="btn" id="hbReview">Mark as reviewed</button>' : ''}<button class="btn" onclick="window.print()">Print</button>${FB.isAdmin() ? `<a class="btn" href="#/admin/flows/${h.id}">Edit flow</a>` : ''}</div></div>
+      <div class="actions">${h.canReview ? '<button class="btn" id="hbReview">Mark as reviewed</button>' : ''}${h.canReview ? `<a class="btn" href="#/handbook/${h.id}/insight">Performance</a>` : ''}<button class="btn" onclick="window.print()">Print</button>${FB.isAdmin() ? `<a class="btn" href="#/admin/flows/${h.id}">Edit flow</a>` : ''}</div></div>
       <div class="doc-grid">
         <div class="card"><h4>Purpose</h4><p>${richText(h.doc.purpose || h.description || '–')}</p></div>
         <div class="card"><h4>Owner</h4><p>${esc(h.owner || h.doc.owner || '–')}</p><h4>Scope</h4><p>${esc(h.doc.scope || '–')}</p></div>

@@ -81,3 +81,6 @@ Cases › a case › Report: a print-ready record (summary with process version,
 
 ## External links: the single source stays where it lives (built)
 A link can point outside Ordovia (link type `url`, migration 0009; https only): a SharePoint or OneDrive file, a Teams channel, a Google Drive file, any page. It is labelled by where it lives, shows with a name and the part that matters, can carry a condition, and appears on objects, processes and steps like any other link. Ordovia only records where things are; nothing is copied and nothing is fetched.
+
+## Process insight (built)
+Handbook › a process › Performance (process owner or administrator; `GET /api/flows/:id/insight`): cases, typical time to finish (median, 9 in 10), where cases wait (average wait per step, slowest first, open and late counts), how cases end (outcomes, rejected highlighted), cases per month, share of late steps. Deliberately per process, not general BI: it is what only Ordovia knows.

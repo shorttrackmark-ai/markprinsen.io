@@ -376,6 +376,22 @@ console.log('links to things outside Ordovia');
   r = await get('/api/handbook/' + calib.id); ok(r.data.steps.find(s => s.name === 'Calibrate').links.some(x => x.external && x.kind === 'Teams'), 'a step lists the Teams channel');
 }
 
+console.log('process insight');
+{
+  const adminCookie = cookie;
+  const flows = (await get('/api/admin/flows')).data, purchase = flows.find(f => f.name === 'Purchase request');
+  r = await get('/api/flows/' + purchase.id + '/insight'); const ins = r.data;
+  ok(r.status === 200 && ins.runs.total === purchase.runs && ins.runs.done > 0 && ins.cycle.medianHours > 0 && ins.cycle.p90Hours >= ins.cycle.medianHours, 'insight agrees with the process list and gives cycle times', ins.cycle);
+  ok(ins.steps.length >= 3 && ins.steps.every(s => s.name && s.done + s.open >= 0) && ins.steps[0].avgHours >= ins.steps[ins.steps.length - 1].avgHours, 'steps are listed slowest first, with their waiting time');
+  ok(ins.outcomes.reduce((a, o) => a + o.n, 0) === ins.runs.done && ins.months.length === 6, 'outcomes add up to the finished cases; six months of volume');
+  await post('/api/login', { email: 'sanne@example.com', password: 'demo1234' }); cookie = '';
+  r = await post('/api/login', { email: 'sanne@example.com', password: 'demo1234' });
+  r = await get('/api/flows/' + purchase.id + '/insight'); ok(r.status === 403, 'a colleague cannot see how a process performs');
+  r = await post('/api/login', { email: 'eva@example.com', password: 'demo1234' }); r = await get('/api/flows/' + purchase.id + '/insight'); ok(r.status === 200, 'but the process owner can (Eva owns purchasing)');
+  cookie = adminCookie;
+  r = await get('/api/flows/999999/insight'); ok(r.status === 404, 'unknown process');
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');

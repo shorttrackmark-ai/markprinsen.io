@@ -1692,3 +1692,37 @@ route('POST', '/api/tasks/:id/reassign', async (c, { id }) => {
   ]);
   return { ok: true };
 });
+
+// ---------------------------------------------------------------- process insight: how a process performs (only Ordovia knows the process)
+route('GET', '/api/flows/:id/insight', async (c, { id }) => {
+  const f = await first(c.db, 'SELECT id, name, owner_id FROM flows WHERE id = ?', Number(id));
+  if (!f) throw new HttpError(404, 'Process not found');
+  if (!c.user.is_admin && f.owner_id !== c.user.id) throw new HttpError(403, 'Only the process owner or an administrator can see how a process performs');
+  const ms = (t) => Date.parse(String(t).replace(' ', 'T') + 'Z');
+  const hrs = (a, b) => (ms(b) - ms(a)) / 3600000;
+  const r1 = (x) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 10) / 10);
+  const inst = await all(c.db, 'SELECT id, status, vars, created_at, finished_at FROM instances WHERE flow_id = ? ORDER BY id DESC LIMIT 5000', f.id);
+  const done = inst.filter(i => i.status === 'done' && i.finished_at);
+  const cyc = done.map(i => hrs(i.created_at, i.finished_at)).filter(Number.isFinite).sort((a, b) => a - b);
+  const at = (p) => (cyc.length ? cyc[Math.min(cyc.length - 1, Math.floor(p * cyc.length))] : null);
+  const outcomes = new Map();
+  for (const i of done) { const o = parse(i.vars, {}).outcome || '(no outcome)'; outcomes.set(o, (outcomes.get(o) || 0) + 1); }
+  const monthKey = (d) => d.toISOString().slice(0, 7), months = [];
+  for (let k = 5; k >= 0; k--) { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - k); months.push({ month: monthKey(d), cases: 0 }); }
+  for (const i of inst) { const m = months.find(x => x.month === String(i.created_at).slice(0, 7)); if (m) m.cases++; }
+  const tasks = await all(c.db, 'SELECT t.node_id, t.name, t.status, t.created_at, t.completed_at, t.due_at FROM tasks t JOIN instances i ON i.id = t.instance_id WHERE i.flow_id = ? LIMIT 20000', f.id);
+  const nowIso = now(), steps = new Map();
+  for (const t of tasks) {
+    const s = steps.get(t.node_id) || { node_id: t.node_id, name: t.name, done: 0, open: 0, waits: [], late: 0, openLate: 0 };
+    if (t.status === 'done' && t.completed_at) { s.done++; s.waits.push(hrs(t.created_at, t.completed_at)); if (t.due_at && t.completed_at > t.due_at) s.late++; }
+    else if (t.status === 'open') { s.open++; if (t.due_at && t.due_at < nowIso) s.openLate++; }
+    steps.set(t.node_id, s);
+  }
+  const stepList = [...steps.values()].map(s => ({ node_id: s.node_id, name: s.name, done: s.done, open: s.open, avgHours: r1(s.waits.length ? s.waits.reduce((a, b) => a + b, 0) / s.waits.length : null), maxHours: r1(s.waits.length ? Math.max(...s.waits) : null), late: s.late + s.openLate, lateRate: s.done + s.open ? Math.round(100 * (s.late + s.openLate) / (s.done + s.open)) : 0 }))
+    .sort((a, b) => (b.avgHours || 0) - (a.avgHours || 0));
+  const totalTasks = stepList.reduce((a, s) => a + s.done + s.open, 0), lateTasks = stepList.reduce((a, s) => a + s.late, 0);
+  return { name: f.name, runs: { total: inst.length, running: inst.filter(i => i.status === 'running').length, done: done.length, stuck: inst.filter(i => i.status === 'stuck').length },
+    cycle: { avgHours: r1(cyc.length ? cyc.reduce((a, b) => a + b, 0) / cyc.length : null), medianHours: r1(at(0.5)), p90Hours: r1(at(0.9)), fastestHours: r1(cyc[0]), slowestHours: r1(cyc[cyc.length - 1]) },
+    outcomes: [...outcomes.entries()].map(([name, n]) => ({ name, n, pct: Math.round(100 * n / Math.max(1, done.length)) })).sort((a, b) => b.n - a.n),
+    months, steps: stepList, lateRate: totalTasks ? Math.round(100 * lateTasks / totalTasks) : 0, based: done.length };
+});
