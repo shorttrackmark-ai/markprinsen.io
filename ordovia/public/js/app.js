@@ -11,31 +11,30 @@
   FB.shell = function (path) {
     const u = FB.state.user, m = FB.state.meta || {};
     const link = (href, icon, label, prefix, badge) => {
-      const active = path === href.slice(1) || (prefix && path.startsWith(prefix));
+      const active = path === href.slice(1) || (prefix && prefix.split('|').some(p => path.startsWith(p)));
       return `<a href="${href}" class="nav-link ${active ? 'active' : ''}"><span class="ico">${icon}</span><span>${label}</span>${badge ? `<b class="badge">${badge}</b>` : ''}</a>`;
     };
+    const inMore = ['/admin/api', '/admin/activity', '/admin/sql'].some(p => path.startsWith(p));
     $('#nav').innerHTML = `<div class="nav-group">
       ${link('#/', '▤', 'My tasks', null, m.openTasks)}
-      ${link('#/areas', '◫', 'Areas', '/area')}
       ${link('#/processes', '⟳', 'Cases', '/processes')}
       ${link('#/handbook', '❖', 'Handbook', '/handbook')}
-      ${link('#/objects', '◈', 'Objects', '/objects')}
+      ${link('#/data', '▦', 'Data', '/data|/objects')}
       ${link('#/documents', '❏', 'Documents', '/documents')}
-      ${link('#/data', '▦', 'Data', '/data')}
-      ${link('#/dashboards', '▣', 'Dashboards', '/dashboards')}</div>
+      ${link('#/dashboards', '▣', 'Dashboards', '/dashboards')}
+      ${link('#/areas', '◫', 'Areas', '/area')}</div>
       ${FB.isAdmin() ? `<div class="nav-title">Build</div><div class="nav-group">
-      ${link('#/admin/templates', '❏', 'Templates', '/admin/templates')}
-      ${link('#/admin/ai', '✦', 'Describe with AI', '/admin/ai')}
       ${link('#/admin/flows', '⇄', 'Flows', '/admin/flows')}
       ${link('#/admin/forms', '☰', 'Forms', '/admin/forms')}
-      ${link('#/admin/areas', '◫', 'Manage areas')}
-      ${link('#/admin/people', '☺', 'People &amp; tags')}</div>
+      ${link('#/admin/templates', '❏', 'Templates', '/admin/templates|/admin/ai')}
+      ${link('#/admin/people', '☺', 'People &amp; tags', '/admin/people')}</div>
       <div class="nav-title">Control</div><div class="nav-group">
-      ${link('#/admin/api', '⇌', 'API & web forms', '/admin/api')}
       ${link('#/admin/health', '✚', 'Health', '/admin/health', healthBadge())}
+      ${link('#/admin/settings', '⚙', 'Settings')}
+      <details class="nav-more" ${inMore ? 'open' : ''}><summary>More</summary>
+      ${link('#/admin/api', '⇌', 'API & web forms', '/admin/api')}
       ${link('#/admin/activity', '☷', 'Activity', '/admin/activity')}
-      ${link('#/admin/sql', '⌘', 'SQL console')}
-      ${link('#/admin/settings', '⚙', 'Settings')}</div>` : ''}`;
+      ${link('#/admin/sql', '⌘', 'SQL console')}</details></div>` : ''}`;
     if (FB.isAdmin() && FB.loadHealthCount) FB.loadHealthCount();
     $('#who').innerHTML = `<a class="who-link" href="#/me" title="What Ordovia knows about you"><span class="avatar">${esc(u.name.split(' ').map(s => s[0]).slice(0, 2).join(''))}</span><span class="who-name">${esc(u.name)}</span></a>`;
     const dc = $('#demoCtl');
@@ -309,19 +308,24 @@
   FB.route('/data', async (main) => {
     await FB.loadMeta();
     const forms = FB.state.meta.forms;
-    const st = { q: '', area: '', status: 'live' };
-    main.innerHTML = `<div class="page"><div class="page-head"><h1>Data</h1></div><div id="dtFilters"></div><div id="dtList"></div></div>`;
+    const st = { q: '', area: '', status: 'live', kind: 'data' };
+    main.innerHTML = `<div class="page"><div class="page-head"><div><h1>Data</h1><p class="muted">Everything people entered, in one place: registers (like suppliers or orders) and objects (like machines, each with its own page).</p></div></div><div id="dtFilters"></div><div id="dtList"></div></div>`;
     const draw = () => {
-      const shown = forms.filter(f => FB.org.match(f, st, f.name + ' ' + (f.description || '')));
+      const shown = forms.filter(f => FB.org.match(f, st, f.name + ' ' + (f.description || '')) && (st.kind === 'all' || (st.kind === 'step' ? f.kind === 'step' : f.kind !== 'step')));
       FB.org.register($('#dtList', main), shown, [
-        { label: 'Register', cell: f => `<a href="#/data/${f.id}"><b>${esc(f.name)}</b></a> ${FB.org.status(f.status)}`, sort: f => f.name.toLowerCase() },
+        { label: 'Register', cell: f => `<a href="#/${f.is_class ? 'objects' : 'data'}/${f.id}"><b>${esc(f.name)}</b></a> ${f.is_class ? '<span class="tag">objects</span>' : ''} ${FB.org.status(f.status)}`, sort: f => f.name.toLowerCase() },
         { label: 'Area', cell: FB.org.cell.areaChip, sort: f => FB.org.areaName(f.area_id) },
         { label: 'Description', cell: f => `<span class="clip">${esc(f.description || '')}</span>`, cls: 'wide', sort: f => f.description || '' },
         { label: 'You can see', cell: f => (f.canView ? 'All records' : 'Your records'), sort: f => (f.canView ? 0 : 1) },
         { label: 'You can add', cell: f => (f.canAdd ? 'Yes' : '–'), sort: f => (f.canAdd ? 0 : 1) },
-      ], { href: f => '#/data/' + f.id, empty: 'No forms match.', one: 'register', many: 'registers', total: forms.length });
+      ], { href: f => '#/' + (f.is_class ? 'objects' : 'data') + '/' + f.id, empty: 'No forms match.', one: 'register', many: 'registers', total: forms.length });
     };
     FB.org.filters($('#dtFilters', main), st, { status: FB.isAdmin(), placeholder: 'Search data…' }, draw);
+    {   // registers and objects first; forms that only exist as process steps one click away
+      const kindSel = document.createElement('select'); kindSel.setAttribute('aria-label', 'Show');
+      kindSel.innerHTML = '<option value="data">Registers and objects</option><option value="step">Forms of processes</option><option value="all">Everything</option>';
+      kindSel.onchange = () => { st.kind = kindSel.value; draw(); }; $('.filters', main).appendChild(kindSel);
+    }
     draw();
   });
 
@@ -399,7 +403,7 @@
   FB.route('/admin/flows', async (main) => {
     const flows = await api.get('/admin/flows');
     const st = { q: '', area: '', status: 'live' };
-    main.innerHTML = `<div class="page"><div class="page-head"><h1>Flows</h1><div class="actions"><button class="btn primary" id="nf">+ New flow</button></div></div><div id="flFilters"></div><div id="flList"></div></div>`;
+    main.innerHTML = `<div class="page"><div class="page-head"><h1>Flows</h1><div class="actions"><a class="btn" href="#/admin/templates">From a template</a><a class="btn" href="#/admin/ai">Describe with AI</a><button class="btn primary" id="nf">+ New flow</button></div></div><div id="flFilters"></div><div id="flList"></div></div>`;
     const setStatus = async (id, status) => {
       const full = await api.get('/admin/flows/' + id);
       try { await api.put('/admin/flows/' + id, { name: full.name, description: full.description, graph: full.graph, doc: full.doc, status }); toast(status === 'archived' ? 'Archived' : 'Restored as draft', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); }

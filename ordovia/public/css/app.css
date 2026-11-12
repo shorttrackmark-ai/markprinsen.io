@@ -607,6 +607,14 @@ pre.code { border-radius: 2px; background: var(--surface-2); border: 1px solid v
   body { background: #fff !important; font-size: 11px; }
 }
 
+/* quieter navigation */
+.nav-more { margin: 0; }
+.nav-more summary { cursor: pointer; padding: 5px 16px; font-size: 12px; color: var(--muted); list-style: none; }
+.nav-more summary::-webkit-details-marker { display: none; }
+.nav-more summary::before { content: '▸ '; }
+.nav-more[open] summary::before { content: '▾ '; }
+.nav-more .nav-link { padding-left: 28px; font-size: 13px; }
+
 /* walkthrough fixes */
 .getting-started { margin-bottom: 18px; border-top: 3px solid var(--primary); }
 .getting-started h2 { margin-top: 0; }

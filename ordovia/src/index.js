@@ -189,6 +189,10 @@ route('POST', '/api/logout', async (c) => {
 // ---------------------------------------------------------------- shared lookups
 route('GET', '/api/meta', async (c) => {
   const D = await c.dir(), forms = await c.forms();
+  // what each form is for: an object class, a register (data worth browsing), or a form that only exists as a step of a process
+  const stepForms = new Set(), recordTargets = new Set();
+  for (const fl of await all(c.db, "SELECT graph FROM flows WHERE status != 'archived'")) for (const n of parse(fl.graph, { nodes: [] }).nodes) { if (!n.formId) continue; if (n.type === 'record') recordTargets.add(Number(n.formId)); else if (n.type === 'task' || n.type === 'start') stepForms.add(Number(n.formId)); }
+  const kindOf = (f) => (f.is_class ? 'object' : stepForms.has(f.id) && !recordTargets.has(f.id) ? 'step' : 'register');
   return {
     user: c.user,
     tags: [...D.tags.values()],
@@ -197,7 +201,7 @@ route('GET', '/api/meta', async (c) => {
     areas: await all(c.db, 'SELECT id, name, description, color, owner_id FROM areas ORDER BY name'),
     documents: await all(c.db, "SELECT id, name, kind, area_id, status FROM documents WHERE status != 'archived' ORDER BY name"),
     personFields: await personFields(c),
-    forms: forms.filter(f => f.status !== 'archived' || c.user.is_admin).map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields, checks: f.checks, area_id: f.area_id, status: f.status, is_class: !!f.is_class, canView: canViewForm(c.user, D, f), canAdd: f.status === 'archived' ? false : canAddForm(c.user, D, f) })),
+    forms: forms.filter(f => f.status !== 'archived' || c.user.is_admin).map(f => ({ id: f.id, name: f.name, slug: f.slug, description: f.description, fields: f.fields, checks: f.checks, area_id: f.area_id, status: f.status, is_class: !!f.is_class, kind: kindOf(f), canView: canViewForm(c.user, D, f), canAdd: f.status === 'archived' ? false : canAddForm(c.user, D, f) })),
     openTasks: (await openTasksFor(c, c.user.id)).length,
   };
 });

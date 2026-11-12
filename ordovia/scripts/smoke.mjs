@@ -452,6 +452,13 @@ console.log('milestone notifications');
   r = await get('/api/instances/' + nid); ok(r.data.instance.status === 'done' && r.data.events.some(e => /Notified example\.invalid that the case ended as “Done”/.test(e.message)), 'a case that ends there records the notification in its timeline', r.data.events.map(e => e.message));
 }
 
+console.log('data page: what each form is for');
+{
+  r = await get('/api/meta'); const kinds = Object.fromEntries(r.data.forms.map(f => [f.name, f.kind]));
+  ok(kinds['Machine'] === 'object' && kinds['Supplier'] === 'register' && kinds['Order register'] === 'register', 'objects and registers are told apart', kinds);
+  ok(kinds['Approval'] === 'step' && kinds['Leave request'] === 'step' && kinds['Calibration result'] === 'step', 'forms that only exist as process steps are marked as such', kinds);
+}
+
 console.log('as a colleague');
 cookie = '';
 r = await post('/api/login', { email: 'bram@example.com', password: 'demo1234' }); ok(r.status === 200, 'colleague logs in');

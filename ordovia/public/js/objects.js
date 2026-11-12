@@ -24,8 +24,8 @@
     const d = await api.get('/objects/' + Number(fid));
     const form = d.form;
     const cols = form.fields.filter(f => !['heading', 'file', 'textarea', 'calc'].includes(f.type)).slice(1, 8);
-    main.innerHTML = `<div class="page page-wide"><div class="page-head"><div><a class="crumb" href="#/objects">← Objects</a><h1>${esc(form.name)}</h1>${form.description ? `<p class="muted">${esc(form.description)}</p>` : ''}</div>
-      <div class="actions">${FB.isAdmin() ? `<a class="btn" href="#/admin/forms/${form.id}">Edit class</a>` : ''}${d.canAdd ? `<button class="btn primary" id="obNew">+ New ${esc(form.name.toLowerCase())}</button>` : ''}</div></div>
+    main.innerHTML = `<div class="page page-wide"><div class="page-head"><div><a class="crumb" href="#/data">← Data</a><h1>${esc(form.name)}</h1>${form.description ? `<p class="muted">${esc(form.description)}</p>` : ''}</div>
+      <div class="actions"><a class="btn" href="#/data/${form.id}">Table view</a>${FB.isAdmin() ? `<a class="btn" href="#/admin/forms/${form.id}">Edit class</a>` : ''}${d.canAdd ? `<button class="btn primary" id="obNew">+ New ${esc(form.name.toLowerCase())}</button>` : ''}</div></div>
       <div class="filters"><input type="search" id="obSearch" placeholder="Search ${esc(form.name.toLowerCase())}…"></div><div id="obTable"></div></div>`;
     let q = '';
     const draw = () => {
