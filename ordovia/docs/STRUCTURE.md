@@ -111,3 +111,6 @@ Conditions are built, not typed: on a decision arrow ("When is this arrow taken?
 
 ## Process checks (hardened)
 A process cannot go live (and Health reports it as an error) when: it lacks exactly one Start or any End; a step has no way out or cannot be reached; steps are connected only to each other and cut off from Start; from some step no path leads to an End (a loop without an exit); a decision has no "otherwise" arrow, has several arrows without a rule, or a lone arrow carries a rule (the case would get stuck); plus the earlier checks (forms exist, rules and formulas valid, https addresses, public web form limits). Messages are plain sentences with the step name. test/process-checks.test.js; all templates pass.
+
+## Phone use
+On screens up to 800 px: inputs are 16 px (no zoom on focus), larger tap targets, the form's submit button is full width and stays at the bottom while scrolling, toasts appear at the top, registers wrap instead of scrolling sideways (the home "recent cases" list is a register).
