@@ -3,10 +3,10 @@
 //   BASE=http://localhost:8787 node scripts/smoke.mjs
 const BASE = process.env.BASE || 'http://localhost:8787';
 if (!/localhost|127\.0\.0\.1/.test(BASE) && process.env.I_KNOW !== '1') { console.error('Refusing to run against', BASE); process.exit(2); }
-let cookie = '', failed = 0, n = 0;
+let cookie = '', tenantCookie = '', failed = 0, n = 0;   // (the company cookie stays like in a browser; clearing `cookie` = signed out)
 async function call(method, path, body, headers = {}) {
-  const r = await fetch(BASE + path, { method, headers: { 'content-type': 'application/json', 'x-ordovia': '1', ...(cookie ? { cookie } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });
-  const sc = r.headers.get('set-cookie'); if (sc) cookie = sc.split(';')[0];
+  const r = await fetch(BASE + path, { method, headers: { 'content-type': 'application/json', 'x-ordovia': '1', ...(cookie || tenantCookie ? { cookie: [cookie, tenantCookie].filter(Boolean).join('; ') } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });
+  for (const sc of r.headers.getSetCookie()) { const kv = sc.split(';')[0]; if (kv.startsWith('ordovia_tenant=')) tenantCookie = kv.endsWith('=') ? '' : kv; else cookie = kv; }
   const text = await r.text(); let data; try { data = JSON.parse(text); } catch { data = text; }
   return { status: r.status, data };
 }
@@ -14,7 +14,7 @@ const ok = (cond, msg, extra) => { n++; if (!cond) { failed++; console.log('  âœ
 const get = (p) => call('GET', p), post = (p, b) => call('POST', p, b || {}), put = (p, b) => call('PUT', p, b), del = (p) => call('DELETE', p);
 
 console.log('setup & login');
-let r = await get('/api/session'); ok(r.data.setup === true, 'fresh workspace asks for setup', r.data);
+let r = await get('/api/session'); ok(r.data.setup === false && r.data.user === null, 'with no company yet the app shows sign-in and sign-up', r.data);
 r = await post('/api/setup', { company: 'Test BV', name: 'Tester', email: 'tester@example.com', password: 'testtest1', demo: true }); ok(r.status === 200, 'setup with demo data', r);
 r = await get('/api/meta'); ok(r.status === 200 && r.data.areas.length === 3, 'meta lists the three demo areas', r.data.areas);
 const forms = r.data.forms; ok(forms.every(f => f.status === 'active'), 'forms are active'); ok(forms.some(f => f.area_id), 'forms have an area');
@@ -72,7 +72,7 @@ console.log('request forms, public web form, API');
     edges: [{ id: 'e1', from: 's', to: 't' }, { id: 'e2', from: 't', to: 'e' }] };
   r = await post('/api/admin/flows', { name: 'Quote', area_id: salesId }); const qId = r.data.id;
   r = await put('/api/admin/flows/' + qId, { name: 'Quote', description: 'Ask Finance for a quote', graph, doc: {}, status: 'active' }); ok(r.status === 200 && r.data.status === 'active', 'activate a process with a request form', r.data);
-  const token = r.data.graph.nodes[0].publicToken; ok(/^[a-f0-9]{24}$/.test(token || ''), 'the server made a public link token', token);
+  const token = r.data.graph.nodes[0].publicToken; ok(/^[a-f0-9]{36}$/.test(token || ''), 'the server made a public link token (company id + 24 random)', token);
   // public: no login
   const saved = cookie; cookie = '';
   r = await get('/api/public/request/' + token); ok(r.status === 200 && r.data.form.fields.length === 3 && !r.data.form.checks.length, 'public form is readable without login', r.data);
@@ -108,8 +108,8 @@ console.log('request forms, public web form, API');
 
 console.log('files, documents, formats');
 {
-  const up = async (name, body, type = 'text/plain') => { const r = await fetch(BASE + '/api/files?name=' + encodeURIComponent(name) + '&type=' + encodeURIComponent(type), { method: 'POST', headers: { 'x-ordovia': '1', cookie }, body }); return { status: r.status, data: await r.json() }; };
-  const dl = async (id, ck = cookie) => { const r = await fetch(BASE + '/api/files/' + id, { headers: { cookie: ck } }); return { status: r.status, text: await r.text(), headers: r.headers }; };
+  const up = async (name, body, type = 'text/plain') => { const r = await fetch(BASE + '/api/files?name=' + encodeURIComponent(name) + '&type=' + encodeURIComponent(type), { method: 'POST', headers: { 'x-ordovia': '1', cookie: [cookie, tenantCookie].filter(Boolean).join('; ') }, body }); return { status: r.status, data: await r.json() }; };
+  const dl = async (id, ck = cookie) => { const r = await fetch(BASE + '/api/files/' + id, { headers: { cookie: [ck, tenantCookie].filter(Boolean).join('; ') } }); return { status: r.status, text: await r.text(), headers: r.headers }; };
   r = await up('norm.txt', 'THE NORM v1'); ok(r.status === 200 && r.data.size === 11, 'upload a file', r.data); const f1 = r.data.id;
   r = await up('evil.html', '<script>alert(1)</script>'); ok(r.status === 415, 'web pages and programs are refused', r.data);
   r = await up('empty.txt', ''); ok(r.status === 400, 'empty files are refused');

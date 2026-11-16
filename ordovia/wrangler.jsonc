@@ -22,6 +22,9 @@
     { "binding": "DB_DEMO", "database_name": "ordovia-demo", "database_id": "2642f888-ce9e-4976-848b-7b811c61d68f", "migrations_dir": "migrations" }
   ],
   // Hourly job: marks overdue tasks, fires reminder webhooks, and at 03:xx UTC resets the example
-  "r2_buckets": [{ "binding": "FILES", "bucket_name": "ordovia-files" }, { "binding": "FILES_DEMO", "bucket_name": "ordovia-demo-files" }],
+  "r2_buckets": [{ "binding": "FILES_EU", "bucket_name": "ordovia-files-eu", "jurisdiction": "eu" }, { "binding": "FILES", "bucket_name": "ordovia-files" }, { "binding": "FILES_DEMO", "bucket_name": "ordovia-demo-files" }],
+  "vars": { "DATA_REGION": "eu" },
+  "durable_objects": { "bindings": [{ "name": "TENANT", "class_name": "TenantDO" }, { "name": "CONTROL", "class_name": "ControlDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TenantDO", "ControlDO"] }],
   "triggers": { "crons": ["17 * * * *"] }
 }

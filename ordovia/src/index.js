@@ -12,6 +12,12 @@ import { advance, startNode, mergeFormData } from './engine.js';
 import { extractJSON, planBundle, resolve, FIELD_TYPES } from './bundle.js';
 import { TEMPLATES, PACKS } from './templates.js';
 import { seedDemo, resetDemo, DEMO_ADMIN, DEMO_PASSWORD } from './seed.js';
+import {
+  TENANT_COOKIE, controlDB, tenantDB, tenantStub, tenantFiles, tenantHint, isLegacyCredential, createTenant, claimEmail, releaseEmail, tenantOfEmail,
+  listTenants, legacyTenantId, importLegacy,
+} from './tenancy.js';
+import { isExampleAddress } from './control.js';
+export { TenantDO, ControlDO } from './tenant-do.js';
 
 const SESSION_DAYS = 14;
 const NEEDS_HOME = 'Choose an area first: every active item belongs to a department, so nothing is left loose.';
@@ -31,9 +37,23 @@ class Ctx {
     this.demo = !!env.DB_DEMO && (path.startsWith('/api/demo/') || readCookie(req, MODE_COOKIE) === 'example');
     this.db = this.demo ? env.DB_DEMO : env.DB; this.files = this.demo ? env.FILES_DEMO : env.FILES;
     this.cookieName = this.demo ? EXAMPLE_COOKIE : COOKIE;
-    this.url = new URL(req.url); this.user = null; this.cookies = [];
+    this.url = new URL(req.url); this.user = null; this.cookies = []; this.tenantId = null;
+    if (!this.demo) { this.db = null; this.files = null; }
     this._dir = null; this._forms = null; this._settings = null; this._body = undefined; this.noteInfo = null;
   }
+  /** Work out which company this call belongs to (cookie, or the id inside an API token / public form link). */
+  async init() {
+    if (this.demo) return;
+    const hint = tenantHint(this.req, this.url, readCookie(this.req, TENANT_COOKIE));
+    if (hint) return this.useTenant(hint.id);
+    if (isLegacyCredential(this.req, this.url)) {   // a token or link from before there were companies: it belongs to the first workspace
+      const lid = await legacyTenantId(this.env);
+      if (lid) this.useTenant(lid);
+      else if (this.env.DB) { this.db = this.env.DB; this.files = this.env.FILES; }
+    }
+  }
+  useTenant(id) { this.tenantId = id; this.db = tenantDB(this.env, id); this.files = tenantFiles(this.env, id); this._dir = this._forms = this._settings = null; }
+  tenantCookie() { return sessionCookie(this.tenantId, 365 * 86400, TENANT_COOKIE); }
   async dir() { return this._dir || (this._dir = await loadDirectory(this.db)); }
   async forms() { return this._forms || (this._forms = await loadForms(this.db)); }
   async formsMap() { return new Map((await this.forms()).map(f => [f.id, f])); }
@@ -69,12 +89,14 @@ export default {
       // CSRF protection: state-changing calls must carry our custom header (forces a CORS preflight cross-site).
       const bearer = /^bearer\s+ord_/i.test(req.headers.get('authorization') || '');
       if (req.method !== 'GET' && !bearer && req.headers.get('x-ordovia') !== '1') throw new HttpError(403, 'Missing request header');
+      await c.init();
       await authenticate(c);
       for (const r of routes) {
         if (r.method !== req.method) continue;
         const m = r.re.exec(url.pathname);
         if (!m) continue;
         if (!r.opts.public && !c.user) throw new HttpError(401, 'Please sign in');
+        if (!c.db && !r.opts.noCompany) throw new HttpError(r.opts.public ? 404 : 401, r.opts.public ? 'This form does not exist' : 'Please sign in');
         if (r.opts.admin) c.requireAdmin();
         const params = {}; r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
         const out = await r.handler(c, params);
@@ -86,6 +108,7 @@ export default {
       throw new HttpError(404, 'Unknown endpoint');
     } catch (e) {
       if (e instanceof HttpError) return reply({ error: e.message, ...(e.extra || {}) }, e.status);
+      if (/Unknown workspace/.test(String(e.message))) return url.pathname.startsWith('/api/public/') ? reply({ error: 'This form does not exist' }, 404) : reply({ error: 'Please sign in' }, 401, { 'set-cookie': sessionCookie('', 0, TENANT_COOKIE) });
       console.error(e);
       const msg = /no such table/i.test(String(e.message)) ? 'Database not initialised – run the D1 migrations (npm run db:migrate:remote).' : 'Server error: ' + e.message;
       return reply({ error: msg }, 500);
@@ -94,15 +117,24 @@ export default {
 
   // Hourly: flag overdue tasks and send reminders to the notification webhook.
   async scheduled(event, env, exec) {
-    const db = env.DB;
     if (env.DB_DEMO && new Date(event.scheduledTime).getUTCHours() === 3) exec.waitUntil(resetDemo(env.DB_DEMO, env.FILES_DEMO));   // (the example starts fresh every night)
-    await cleanLooseFiles(db, env.FILES);
-    const due = await overdueCheck(db);
-    if (!due.length) return;
-    const hook = await first(db, "SELECT value FROM settings WHERE key = 'notify_webhook'"), fmt = await first(db, "SELECT value FROM settings WHERE key = 'notify_format'");
-    if (hook && hook.value) exec.waitUntil(Promise.all(due.map(t => postJSON(hook.value, notifyBody(fmt && fmt.value, { event: 'task.overdue', text: `Overdue: ${t.name} – ${t.title}${t.owner_name ? ' (handed to ' + t.owner_name + ')' : ''}`, task: { id: t.id, name: t.name, title: t.title } })))));
+    // every company gets its own turn; one company failing never stops the others
+    for (const t of await listTenants(env).catch(() => [])) {
+      try { await hourly(tenantDB(env, t.id), tenantFiles(env, t.id), exec); } catch (e) { console.warn('hourly job failed for', t.id, e.message); }
+    }
+    // the first workspace, as long as it has not been carried over into a company of its own
+    if (env.DB && !(await legacyTenantId(env).catch(() => null))) await hourly(env.DB, env.FILES, exec);
   },
 };
+
+/** The hourly chores of one company: tidy loose uploads, mark overdue tasks, send reminders. */
+async function hourly(db, files, exec) {
+  await cleanLooseFiles(db, files);
+  const due = await overdueCheck(db);
+  if (!due.length) return;
+  const hook = await first(db, "SELECT value FROM settings WHERE key = 'notify_webhook'"), fmt = await first(db, "SELECT value FROM settings WHERE key = 'notify_format'");
+  if (hook && hook.value) exec.waitUntil(Promise.all(due.map(t => postJSON(hook.value, notifyBody(fmt && fmt.value, { event: 'task.overdue', text: `Overdue: ${t.name} – ${t.title}${t.owner_name ? ' (handed to ' + t.owner_name + ')' : ''}`, task: { id: t.id, name: t.name, title: t.title } })))));
+}
 
 /** The notification webhook speaks plain JSON, or the message card that a Microsoft Teams workflow ("When a Teams webhook request is received") posts to a channel. */
 function notifyBody(format, p) {
@@ -131,7 +163,7 @@ async function authenticate(c) {
     return;
   }
   const token = readCookie(c.req, c.cookieName);
-  if (!token) return;
+  if (!token || !c.db) return;
   const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin, p.deputy_id, p.away_until FROM sessions s JOIN persons p ON p.id = s.person_id
     WHERE s.token_hash = ? AND s.expires_at > ? AND p.active = 1`, await sha256(token), now());
   if (s) c.user = s;
@@ -147,44 +179,73 @@ async function startSession(c, personId) {
 }
 
 route('GET', '/api/session', async (c) => {
+  if (!c.db) return { setup: false, user: null, settings: { company: 'Ordovia', color: '', demo: false, demoSite: false, canTryExample: !!c.env.DB_DEMO } };
   const any = await first(c.db, 'SELECT id FROM persons LIMIT 1');
   const s = await c.settings();
   return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', demo: s.demo === '1', demoSite: c.demo, canTryExample: !c.demo && !!c.env.DB_DEMO } };
-}, { public: true });
+}, { public: true, noCompany: true });
 
+// A new company: its own database, its first administrator, optionally the example people and processes.
 route('POST', '/api/setup', async (c) => {
-  if (await first(c.db, 'SELECT id FROM persons LIMIT 1')) throw new HttpError(409, 'Already set up');
+  if (c.demo) throw new HttpError(403, 'Create your own company outside the example.');
   const b = await c.body();
   const email = String(b.email || '').trim(), name = String(b.name || '').trim();
   if (!name || !/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, 'Name and a valid e-mail are required');
   if (String(b.password || '').length < 8) throw new HttpError(400, 'Use a password of at least 8 characters');
   const hash = await hashPassword(String(b.password));
-  await c.db.batch([
-    c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('company', ?)").bind(String(b.company || 'My company').slice(0, 80)),
-  ]);
-  let adminId;
-  if (b.demo) adminId = await seedDemo(c.db, { name, email, hash }, c.files);
-  else adminId = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at) VALUES (?,?,?,1,1,?)', name, email, hash, now());
-  await startSession(c, adminId);
+  const ctl = await controlDB(c.env);
+  if (!isExampleAddress(email) && (await tenantOfEmail(ctl, email))) throw new HttpError(409, 'This e-mail address already has an account. Sign in instead.');
+  const tid = await createTenant(c.env, b.company);
+  c.useTenant(tid);
+  try {
+    await claimEmail(ctl, tid, email);
+    await c.db.batch([
+      c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('company', ?)").bind(String(b.company || 'My company').slice(0, 80)),
+    ]);
+    let adminId;
+    if (b.demo) adminId = await seedDemo(c.db, { name, email, hash }, c.files);
+    else adminId = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at) VALUES (?,?,?,1,1,?)', name, email, hash, now());
+    await startSession(c, adminId);
+  } catch (e) {   // nothing half-made is left behind
+    await tenantStub(c.env, tid).wipe().catch(() => {});
+    await run(ctl, 'DELETE FROM identities WHERE tenant_id = ?', tid); await run(ctl, 'DELETE FROM tenants WHERE id = ?', tid);
+    throw e;
+  }
+  c.cookies.push(c.tenantCookie());
   return { ok: true };
-}, { public: true });
+}, { public: true, noCompany: true });
 
+const NO_HASH = 'pbkdf2$1$AAAAAAAAAAAAAAAAAAAAAA==$x';
 route('POST', '/api/login', async (c) => {
   const b = await c.body();
-  const p = await first(c.db, 'SELECT id, pw_hash FROM persons WHERE email = ? AND active = 1', String(b.email || '').trim());
+  const email = String(b.email || '').trim(), password = String(b.password || '');
+  if (!c.demo) {
+    // which company? the one this e-mail address belongs to (example people: the company of this browser)
+    const ctl = await controlDB(c.env);
+    let tid = await tenantOfEmail(ctl, email);
+    if (!tid && c.tenantId) tid = c.tenantId;
+    if (!tid && c.env.DB && !(await legacyTenantId(c.env))) {   // the very first workspace: carried over the first time one of its people signs in
+      const lp = await first(c.env.DB, 'SELECT pw_hash FROM persons WHERE email = ? AND active = 1', email);
+      if (lp && await verifyPassword(password, lp.pw_hash)) tid = await importLegacy(c.env);
+    }
+    if (!tid) { await verifyPassword(password, NO_HASH); throw new HttpError(401, 'Wrong e-mail or password'); }
+    c.useTenant(tid);
+  }
+  const p = await first(c.db, 'SELECT id, pw_hash FROM persons WHERE email = ? AND active = 1', email);
   // Always run the hash so timing does not reveal whether the e-mail exists.
-  const ok = await verifyPassword(String(b.password || ''), p ? p.pw_hash : 'pbkdf2$1$AAAAAAAAAAAAAAAAAAAAAA==$x');
+  const ok = await verifyPassword(password, p ? p.pw_hash : NO_HASH);
   if (!p || !ok) throw new HttpError(401, 'Wrong e-mail or password');
   await startSession(c, p.id);
+  if (c.tenantId) c.cookies.push(c.tenantCookie());
   return { ok: true };
-}, { public: true });
+}, { public: true, noCompany: true });
 
 route('POST', '/api/logout', async (c) => {
   const token = readCookie(c.req, c.cookieName);
-  if (token) await run(c.db, 'DELETE FROM sessions WHERE token_hash = ?', await sha256(token));
+  if (token && c.db) await run(c.db, 'DELETE FROM sessions WHERE token_hash = ?', await sha256(token));
   c.cookies.push(sessionCookie('', 0, c.cookieName));
   return { ok: true };
-}, { public: true });
+}, { public: true, noCompany: true });
 
 // ---------------------------------------------------------------- shared lookups
 route('GET', '/api/meta', async (c) => {
@@ -690,7 +751,7 @@ route('PUT', '/api/admin/flows/:id', async (c, { id }) => {
   const b = await c.body();
   const graphObj = b.graph || { nodes: [], edges: [] };
   const st0 = startNode(graphObj);
-  if (st0 && st0.publicEnabled && !/^[a-f0-9]{24}$/.test(st0.publicToken || '')) st0.publicToken = randomToken().slice(0, 24);   // (the public link: unguessable, made by the server)
+  if (st0 && st0.publicEnabled && !/^(?:[a-f0-9]{12})?[a-f0-9]{24}$/.test(st0.publicToken || '')) st0.publicToken = (c.tenantId || '') + randomToken().slice(0, 24);   // (the public link: unguessable, made by the server)
   if (st0 && !st0.publicEnabled) delete st0.publicToken;
   const graph = JSON.stringify(graphObj);
   const version = graph !== f.graph ? f.version + 1 : f.version; // running processes keep their own snapshot
@@ -757,6 +818,9 @@ async function savePerson(c, pid, b) {
   const email = String(b.email || '').trim(), name = String(b.name || '').trim();
   if (!name || !/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, 'Name and a valid e-mail are required');
   if (await first(c.db, 'SELECT 1 FROM persons WHERE email = ? AND id != ?', email, pid || 0)) throw new HttpError(409, 'E-mail already in use');
+  const prevEmail = pid ? (await first(c.db, 'SELECT email FROM persons WHERE id = ?', pid) || {}).email : null;
+  const ctl = c.tenantId ? await controlDB(c.env) : null;
+  if (ctl && email !== prevEmail) await claimEmail(ctl, c.tenantId, email);
   if (b.password && String(b.password).length < 8) throw new HttpError(400, 'Use a password of at least 8 characters');
   if (!pid && !b.password) throw new HttpError(400, 'Set a password for the new person');
   if (pid === c.user.id && (!b.is_admin || !b.active)) throw new HttpError(400, 'You cannot remove your own admin rights or deactivate yourself');
@@ -782,6 +846,7 @@ async function savePerson(c, pid, b) {
   st.push(c.db.prepare('DELETE FROM person_tags WHERE person_id = ?').bind(id));
   for (const tid of (b.tagIds || []).map(Number).filter(Number.isInteger)) st.push(c.db.prepare('INSERT OR IGNORE INTO person_tags(person_id, tag_id) VALUES (?,?)').bind(id, tid));
   await c.db.batch(st);
+  if (ctl && prevEmail && prevEmail !== email) await releaseEmail(ctl, c.tenantId, prevEmail);
   return { id };
 }
 // The Person class: which attributes every person has (function, employee number, ...). Same field definitions as forms, without links and files.
@@ -1021,8 +1086,8 @@ route('GET', '/api/search', async (c) => {
 
 // ---------------------------------------------------------------- public web forms: a process's request form, open to anyone with the link
 const publicFlow = async (c, token) => {
-  if (!/^[a-f0-9]{24}$/.test(token || '')) throw new HttpError(404, 'This form does not exist');
-  const rows = await all(c.db, "SELECT * FROM flows WHERE status = 'active' AND graph LIKE ?", '%"publicToken":"' + token + '"%');
+  if (!/^(?:[a-f0-9]{12})?[a-f0-9]{24}$/.test(token || '')) throw new HttpError(404, 'This form does not exist');
+  const rows = await all(c.db, "SELECT * FROM flows WHERE status = 'active' AND instr(graph, ?) > 0", '"publicToken":"' + token + '"');
   for (const f of rows) { const st = startNode(parse(f.graph, { nodes: [] })); if (st && st.publicEnabled && st.publicToken === token) return { flow: f, start: st }; }
   throw new HttpError(404, 'This form does not exist or is closed');
 };
@@ -1053,7 +1118,7 @@ route('POST', '/api/admin/tokens', async (c) => {
   if (!name) throw new HttpError(400, 'Give the token a name, e.g. the system that will use it');
   const pid = await personOf(c, b.person_id);
   if (!pid) throw new HttpError(400, 'Choose the person this token acts as');
-  const token = 'ord_' + randomToken();
+  const token = 'ord_' + (c.tenantId || '') + randomToken();
   const id = await run(c.db, 'INSERT INTO api_tokens(name, token_hash, token_hint, person_id, created_by, created_at) VALUES (?,?,?,?,?,?)', name, await sha256(token), token.slice(0, 8) + '…' + token.slice(-4), pid, c.user.id, now());
   c.note(name, 'acts as ' + (await c.dir()).persons.get(pid).name);
   return { id, token };   // (shown once: only its hash is kept)
@@ -1166,7 +1231,7 @@ route('GET', '/api/v1/openapi.json', async (c) => {
     },
   };
   return new Response(JSON.stringify(spec, null, 1), { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=300', 'content-disposition': 'inline; filename="ordovia-api.swagger.json"' } });
-}, { public: true });
+}, { public: true, noCompany: true });
 
 // ---------------------------------------------------------------- the public example (its own database, DB_DEMO)
 const PERSONAS = { admin: DEMO_ADMIN.email, anna: 'anna@example.com', bram: 'bram@example.com', sanne: 'sanne@example.com', carla: 'carla@example.com', daan: 'daan@example.com', eva: 'eva@example.com' };
@@ -1183,12 +1248,12 @@ route('POST', '/api/demo/enter', async (c) => {
   await startSession(c, p.id);
   c.cookies.push(`${MODE_COOKIE}=example; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`);
   return { ok: true };
-}, { public: true });
+}, { public: true, noCompany: true });
 // back to the real workspace
 route('POST', '/api/demo/leave', async (c) => {
   c.cookies.push(`${MODE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
   return { ok: true };
-}, { public: true });
+}, { public: true, noCompany: true });
 route('POST', '/api/demo/reset', async (c) => {
   if (!c.demo) throw new HttpError(404, 'Not available');
   const nowMs = Date.now();
@@ -1197,7 +1262,7 @@ route('POST', '/api/demo/reset', async (c) => {
   await resetDemo(c.db, c.files);
   await run(c.db, "INSERT OR REPLACE INTO settings(key, value) VALUES ('demo_seeded_at', ?)", String(Date.now()));
   return { ok: true };
-}, { public: true });
+}, { public: true, noCompany: true });
 
 route('POST', '/api/admin/assign-area', async (c) => {
   const b = await c.body();

@@ -72,12 +72,14 @@
       <label>E-mail<input name="email" type="email" autocomplete="username" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn primary block">Sign in</button>
+      <p class="small muted center">New here? <a href="#" id="newCo">Create your company</a> – free for 14 days.</p>
       ${exampleButton()}
       ${FB.state.settings.demo ? `<div class="demo-users"><p class="small muted">Demo colleagues (password <code>demo1234</code>):</p>
         ${[['anna', 'Anna – Manager, Sales'], ['bram', 'Bram – Employee, Sales'], ['carla', 'Carla – Employee, Operations'], ['daan', 'Daan – Manager, Operations'], ['eva', 'Eva – Finance']]
           .map(([k, l]) => `<button type="button" class="chip" data-email="${k}@example.com">${esc(l)}</button>`).join('')}</div>` : ''}
     </form></div>`;
     wireExample(main);
+    $('#newCo', main).onclick = (e) => { e.preventDefault(); P.setup(main); };
     const f = $('#loginForm');
     $$('[data-email]', f).forEach(b => b.onclick = () => { f.email.value = b.dataset.email; f.password.value = 'demo1234'; f.requestSubmit(); });
     f.onsubmit = async (e) => {
@@ -96,8 +98,10 @@
       <label>E-mail<input name="email" type="email" required autocomplete="username"></label>
       <label>Password <small class="muted">(at least 8 characters)</small><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
       <label class="check"><input type="checkbox" name="demo"><span>Add the example company (colleagues, forms, processes, dashboard) so I can explore – leave unticked for a clean start</span></label>
-      <button class="btn primary block">Create workspace</button>${exampleButton()}</form></div>`;
+      <button class="btn primary block">Create workspace</button>
+      <p class="small muted center">Already have an account? <a href="#" id="haveCo">Sign in</a></p>${exampleButton()}</form></div>`;
     wireExample(main);
+    $('#haveCo', main).onclick = (e) => { e.preventDefault(); FB.state.setup = false; P.login(main); };
     const f = $('#setupForm');
     f.onsubmit = async (e) => {
       e.preventDefault();

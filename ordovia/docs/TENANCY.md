@@ -1,6 +1,6 @@
 # Tenancy: how every customer company gets isolated data
 
-Status: PROPOSAL, waiting for approval. Nothing in this document is built yet.
+Status: APPROVED and BUILT (Option A). Changes against the proposal are listed at the end under "As built".
 
 ## Where we are
 
@@ -78,3 +78,17 @@ Isolation by structure is the strongest sales argument for companies that put pr
 1. Approve Option A (or choose B).
 2. The existing real workspace: do you want it imported as tenant 1, or is it test data that can be dropped? (The example is unaffected either way.)
 3. Region name: "EU jurisdiction" guarantees data stays in the EU; it does not let us pick a country. Is that enough?
+
+## As built
+
+- **Control register = a Durable Object (`ControlDO`), not a D1.** Same adapter, same lazy migrations, no extra database to create or migrate with a command. It holds `tenants`, `identities` (e-mail → company) and `control_settings`. It is only read at sign-in, sign-up and by the hourly job; a normal request goes straight to the company's own object (the company id is in the cookie, the API token or the public link).
+- **Company ids** are 12 random hex characters. New API tokens are `ord_<id><64 hex>`, public form links `<id><24 hex>`, so no lookup is needed. Old-style tokens and links belong to the first workspace.
+- **Sessions** stay inside the company's database. The cookie `ordovia_tenant` only says where to look; the session still has to match there. A made-up id gets "Unknown workspace" (a company's database only exists after sign-up provisioned it).
+- **One e-mail address = one company.** Addresses on example.com/org/net (the example people) are not claimed; they only sign in from a browser that already knows its company.
+- **Lazy migrations**: `scripts/genmig.mjs` bundles `migrations/*.sql` into `src/migrations.gen.js` (run by `npm test` and `npm run deploy`). A company's object applies what it is missing the first time it is used after a deploy. The hourly job visits every company.
+- **Files**: one EU bucket (`ordovia-files-eu`), every key prefixed with the company (`t<id>/…`) by `TenantFiles`, so a company cannot even name another's file.
+- **First workspace**: the old single database stays untouched. The first time one of its people signs in (password checked against the old database) it is copied into a company of its own (rows, form views, files). Until then, old tokens and links keep working against the old database; after that they point at the company.
+- **Example**: unchanged, its own D1 and bucket, reset nightly.
+- **Local development**: the local runtime has no jurisdictions; run with `--var DATA_REGION:local`. Production has `DATA_REGION=eu`.
+- **Limits found while building**: LIKE patterns are limited to 50 bytes in Durable Object SQLite (as in D1); the public-link lookup uses `instr()` instead.
+- **Tests**: `test/tenantdb.test.js` (adapter on real SQLite, file prefixes, company id in token/link), `scripts/smoke-tenants.mjs` (37 checks: two companies, cross-company cookies/tokens/files, sign-in routing, one address one company).

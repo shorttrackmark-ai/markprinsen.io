@@ -114,3 +114,6 @@ A process cannot go live (and Health reports it as an error) when: it lacks exac
 
 ## Phone use
 On screens up to 800 px: inputs are 16 px (no zoom on focus), larger tap targets, the form's submit button is full width and stays at the bottom while scrolling, toasts appear at the top, registers wrap instead of scrolling sideways (the home "recent cases" list is a register).
+
+## Companies (multi-tenant)
+Every company has its own Durable Object database (`TenantDO`, EU) and file prefix; `ControlDO` is the register of companies and sign-in addresses. See docs/TENANCY.md. Code: src/tenantdb.js (D1-shaped adapter), src/tenant-do.js, src/tenancy.js, src/control.js; `Ctx.init()` picks the company per request. Sign-up (`POST /api/setup`) creates a company; sign-in finds it by e-mail. Run the local smoke tests with `--var DATA_REGION:local`: smoke-example, smoke, smoke-tenants.
