@@ -8,8 +8,8 @@
     "dev": "wrangler d1 migrations apply ordovia --local && wrangler dev",
     "db:migrate:local": "wrangler d1 migrations apply ordovia --local",
     "db:migrate:remote": "wrangler d1 migrations apply ordovia --remote",
-    "deploy": "node scripts/genmig.mjs && node scripts/stamp.mjs && wrangler d1 migrations apply ordovia --remote && wrangler d1 migrations apply ordovia-demo --remote && wrangler deploy",
-    "test": "node scripts/genmig.mjs && node --test test/*.test.js"
+    "deploy": "node scripts/genmig.mjs && node scripts/geni18n.mjs && node scripts/stamp.mjs && wrangler d1 migrations apply ordovia --remote && wrangler d1 migrations apply ordovia-demo --remote && wrangler deploy",
+    "test": "node scripts/genmig.mjs && node scripts/geni18n.mjs && node --test test/*.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.40.0"

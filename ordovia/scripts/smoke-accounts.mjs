@@ -21,7 +21,7 @@ const run = Date.now().toString(36);
 const A = browser(); let r;
 
 console.log('invitation');
-r = await A.post('/api/setup', { company: 'Accounts BV', name: 'Admin', email: `admin.${run}@acc.test`, password: 'adminpass1' }); ok(r.status === 200, 'a company signs up');
+r = await A.post('/api/setup', { company: 'Accounts BV', name: 'Admin', email: `admin.${run}@acc.test`, password: 'adminpass1', lang: 'en' }); ok(r.status === 200, 'a company signs up');
 r = await A.post('/api/admin/people', { name: 'Nina New', email: `nina.${run}@acc.test`, is_admin: false, active: true }); ok(r.status === 200 && r.data.invite && r.data.invite.sent === true && !r.data.invite.link, 'adding a person without a password sends an invitation', r.data);
 const nina = r.data.id;
 let mails = await outbox(); let m = mails.find(x => x.to_addr === `nina.${run}@acc.test`);

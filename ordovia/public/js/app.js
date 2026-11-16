@@ -76,11 +76,12 @@
       <p class="small muted center"><a href="#" id="forgot">Forgot your password?</a></p>
       <p class="small muted center">New here? <a href="#" id="newCo">Create your company</a> – free for 14 days.</p>
       ${exampleButton()}
+      ${FB.langSwitchHtml()}
       ${FB.state.settings.demo ? `<div class="demo-users"><p class="small muted">Demo colleagues (password <code>demo1234</code>):</p>
         ${[['anna', 'Anna – Manager, Sales'], ['bram', 'Bram – Employee, Sales'], ['carla', 'Carla – Employee, Operations'], ['daan', 'Daan – Manager, Operations'], ['eva', 'Eva – Finance']]
           .map(([k, l]) => `<button type="button" class="chip" data-email="${k}@example.com">${esc(l)}</button>`).join('')}</div>` : ''}
     </form></div>`;
-    wireExample(main);
+    wireExample(main); FB.wireLang(main);
     $('#newCo', main).onclick = (e) => { e.preventDefault(); P.setup(main); };
     $('#forgot', main).onclick = (e) => { e.preventDefault(); FB.forgotPassword(); };
     const f = $('#loginForm');
@@ -102,15 +103,15 @@
       <label>Password <small class="muted">(at least 8 characters)</small><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
       <label class="check"><input type="checkbox" name="demo"><span>Add the example company (colleagues, forms, processes, dashboard) so I can explore – leave unticked for a clean start</span></label>
       <button class="btn primary block">Create workspace</button>
-      <p class="small muted center">Already have an account? <a href="#" id="haveCo">Sign in</a></p>${exampleButton()}</form></div>`;
-    wireExample(main);
+      <p class="small muted center">Already have an account? <a href="#" id="haveCo">Sign in</a></p>${exampleButton()}${FB.langSwitchHtml()}</form></div>`;
+    wireExample(main); FB.wireLang(main);
     $('#haveCo', main).onclick = (e) => { e.preventDefault(); FB.state.setup = false; P.login(main); };
     const f = $('#setupForm');
     f.onsubmit = async (e) => {
       e.preventDefault();
       const btn = $('button', f); btn.disabled = true; btn.textContent = 'Setting up…';
       try {
-        await api.post('/setup', { company: f.company.value, name: f.name.value, email: f.email.value, password: f.password.value, demo: f.demo.checked });
+        await api.post('/setup', { company: f.company.value, name: f.name.value, email: f.email.value, password: f.password.value, demo: f.demo.checked, lang: FB.i18n.lang });
         await boot();
       } catch (err) { toast(err.message, 'error'); btn.disabled = false; btn.textContent = 'Create workspace'; }
     };
@@ -545,11 +546,12 @@
     main.innerHTML = `<div class="page"><div class="page-head"><h1>Settings</h1></div>
       <form class="card narrow" id="sf"><h3>Workspace</h3>
         <label>Company name<input name="company" value="${esc(s.company || '')}"></label>
+        <label>Language of the company <small class="muted">(everyone starts with this; each person can choose their own)</small><select name="lang" data-notranslate><option value="nl" ${s.lang !== 'en' ? 'selected' : ''}>Nederlands</option><option value="en" ${s.lang === 'en' ? 'selected' : ''}>English</option></select></label>
         <label>Brand colour<span class="color-row"><input type="color" name="color" value="${esc(s.color || '#4f46e5')}"><button type="button" class="btn small ghost" id="resetColor">Default</button></span></label>
         <label>Notification webhook <small class="muted">(https – new and overdue tasks are posted here)</small><input name="notify_webhook" class="mono" value="${esc(s.notify_webhook || '')}" placeholder="https://…"></label>
         <label>Message format<select name="notify_format"><option value="json" ${s.notify_format !== 'teams' ? 'selected' : ''}>Plain JSON (Slack, Power Automate, Zapier, your own system)</option><option value="teams" ${s.notify_format === 'teams' ? 'selected' : ''}>Microsoft Teams card (Workflows “When a Teams webhook request is received”)</option></select></label>
         <div class="form-actions left"><button class="btn primary">Save</button></div></form>
-      <div class="card narrow"><h3>Your data</h3><p class="muted">Everything is stored in your own Cloudflare D1 (SQLite) database. Download a full JSON export at any time.</p>
+      <div class="card narrow"><h3>Your data</h3><p class="muted">Everything of your company is stored in its own database in the EU. Download a full JSON export at any time.</p>
         <a class="btn" href="/api/admin/export">Download export</a></div></div>`;
     const f = $('#sf', main);
     let color = s.color || '';
@@ -558,7 +560,7 @@
     f.onsubmit = async (e) => {
       e.preventDefault();
       try {
-        await api.put('/admin/settings', { company: f.company.value, color, notify_webhook: f.notify_webhook.value.trim(), notify_format: f.notify_format.value });
+        await api.put('/admin/settings', { company: f.company.value, lang: f.lang.value, color, notify_webhook: f.notify_webhook.value.trim(), notify_format: f.notify_format.value });
         FB.state.settings.company = f.company.value; FB.state.settings.color = color; FB.applyBranding(); FB.shell('/admin/settings'); toast('Settings saved', 'ok');
       } catch (err) { toast(err.message, 'error'); }
     };
@@ -569,6 +571,7 @@
     try {
       const s = await api.get('/session');
       FB.state.setup = s.setup; FB.state.settings = s.settings; FB.state.user = s.user;
+      if (FB.syncLang(s.user)) return;
       FB.applyBranding();
       if (s.user) await FB.loadMeta();
     } catch (e) {

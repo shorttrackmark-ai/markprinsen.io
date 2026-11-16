@@ -13,7 +13,7 @@
   const fmtNum = (v, w) => {
     if (v == null) return '–';
     const d = w && w.decimals !== '' && w.decimals != null ? Number(w.decimals) : (Math.abs(v) < 100 ? 2 : 0);
-    const s = typeof v === 'number' ? v.toLocaleString(undefined, { maximumFractionDigits: d }) : String(v);
+    const s = typeof v === 'number' ? v.toLocaleString(FB.locale(), { maximumFractionDigits: d }) : String(v);
     return (w && w.prefix || '') + s + (w && w.suffix || '');
   };
   function niceMax(v) {

@@ -19,6 +19,7 @@ import {
 import { isExampleAddress } from './control.js';
 import { billingOn, billingState, assertWritable, seatLimit, billingPage, startCheckout, startPortal, verifySignature, handleEvent, recordUsage } from './billing.js';
 import { TRIAL_DAYS, tierOf } from './plans.js';
+import { localize, trText } from './localize.js';
 import { issueToken, openToken, useToken, mailLink, limitCheck, limitHit, limitClear, clientIp } from './accounts.js';
 export { TenantDO, ControlDO } from './tenant-do.js';
 
@@ -163,14 +164,14 @@ async function authenticate(c) {
     const raw = auth.replace(/^bearer\s+/i, '').trim();
     const t = await first(c.db, 'SELECT t.id, t.person_id FROM api_tokens t JOIN persons p ON p.id = t.person_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND p.active = 1', await sha256(raw));
     if (!t) throw new HttpError(401, 'Invalid or revoked API token');
-    c.user = await first(c.db, 'SELECT id, name, email, is_admin, deputy_id, away_until FROM persons WHERE id = ?', t.person_id);
+    c.user = await first(c.db, 'SELECT id, name, email, is_admin, deputy_id, away_until, lang FROM persons WHERE id = ?', t.person_id);
     c.viaToken = t.id;
     c.exec.waitUntil(run(c.db, 'UPDATE api_tokens SET last_used_at = ? WHERE id = ?', now(), t.id));
     return;
   }
   const token = readCookie(c.req, c.cookieName);
   if (!token || !c.db) return;
-  const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin, p.deputy_id, p.away_until FROM sessions s JOIN persons p ON p.id = s.person_id
+  const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin, p.deputy_id, p.away_until, p.lang FROM sessions s JOIN persons p ON p.id = s.person_id
     WHERE s.token_hash = ? AND s.expires_at > ? AND p.active = 1`, await sha256(token), now());
   if (s) c.user = s;
 }
@@ -189,7 +190,7 @@ route('GET', '/api/session', async (c) => {
   const any = await first(c.db, 'SELECT id FROM persons LIMIT 1');
   const s = await c.settings();
   const bill = c.user && c.tenantId ? await billingState(c) : null;
-  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', demo: s.demo === '1', demoSite: c.demo, canTryExample: !c.demo && !!c.env.DB_DEMO, billing: bill && bill.on ? { access: bill.access, status: bill.status, banner: bill.banner, daysLeft: bill.daysLeft } : null } };
+  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', lang: s.lang || null, demo: s.demo === '1', demoSite: c.demo, canTryExample: !c.demo && !!c.env.DB_DEMO, billing: bill && bill.on ? { access: bill.access, status: bill.status, banner: bill.banner, daysLeft: bill.daysLeft } : null } };
 }, { public: true, noCompany: true });
 
 // A new company: its own database, its first administrator, optionally the example people and processes.
@@ -208,6 +209,7 @@ route('POST', '/api/setup', async (c) => {
     await claimEmail(ctl, tid, email);
     await c.db.batch([
       c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('company', ?)").bind(String(b.company || 'My company').slice(0, 80)),
+      c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('lang', ?)").bind(b.lang === 'en' ? 'en' : 'nl'),
       c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('billing_status', 'trial')"),
       c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('billing_trial_ends', ?)").bind(new Date(Date.now() + TRIAL_DAYS * 86400000).toISOString().slice(0, 19).replace('T', ' ')),
     ]);
@@ -312,6 +314,12 @@ route('POST', '/api/forgot', async (c) => {
   return { ok: true };
 }, { public: true, noCompany: true });
 
+route('POST', '/api/me/language', async (c) => {
+  const lang = String((await c.body()).lang || '');
+  if (!['nl', 'en'].includes(lang)) throw new HttpError(400, 'Language must be nl or en');
+  await run(c.db, 'UPDATE persons SET lang = ? WHERE id = ?', lang, c.user.id);
+  return { ok: true };
+}, { allowReadOnly: true });
 route('POST', '/api/me/password', async (c) => {
   const b = await c.body();
   const p = await first(c.db, 'SELECT pw_hash FROM persons WHERE id = ?', c.user.id);
@@ -1026,6 +1034,7 @@ route('PUT', '/api/admin/settings', async (c) => {
   const st = [];
   const set = (k, v) => st.push(c.db.prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, v));
   if (b.company != null) set('company', String(b.company).slice(0, 80));
+  if (b.lang != null) { if (!['nl', 'en'].includes(b.lang)) throw new HttpError(400, 'Language must be nl or en'); set('lang', b.lang); }
   if (b.color != null) { if (b.color && !/^#[0-9a-f]{6}$/i.test(b.color)) throw new HttpError(400, 'Colour must look like #4f46e5'); set('color', b.color); }
   if (c.demo && b.notify_webhook) throw new HttpError(403, 'Webhooks are switched off in the example.');
   if (b.notify_webhook != null) { if (b.notify_webhook && !/^https:\/\//.test(b.notify_webhook)) throw new HttpError(400, 'Webhook must start with https://'); set('notify_webhook', b.notify_webhook); }
@@ -1830,7 +1839,13 @@ route('POST', '/api/admin/ai/apply', async (c) => {
 
 // ---------------------------------------------------------------- templates: ready-made processes, added as drafts
 const templateOf = (id) => { const t = TEMPLATES.find(x => x.id === id); if (!t) throw new HttpError(404, 'Template not found'); return t; };
-const templateBundle = (t, area) => ({ ...JSON.parse(JSON.stringify(t.bundle)), area: String(area || t.area || '').trim() || undefined });
+/** The language this person works in: their own, else the company's, else Dutch. */
+const langOf = async (c) => (c.user && c.user.lang) || (await c.settings()).lang || 'nl';
+/** A template as a bundle, in the person's language (Dutch templates are stored in Dutch, so the company can edit them in its own words). */
+const templateBundle = (t, area, lang) => {
+  const b = JSON.parse(JSON.stringify(t.bundle)), a = String(area || t.area || '').trim() || undefined;
+  return lang === 'nl' ? { ...localize(b), area: a && trText(a) } : { ...b, area: a };
+};
 route('GET', '/api/admin/templates', async (c) => {
   const ctx = await aiContext(c);
   const have = new Set(ctx.flows.map(f => f.name.toLowerCase()));
@@ -1838,12 +1853,12 @@ route('GET', '/api/admin/templates', async (c) => {
 }, { admin: true });
 route('POST', '/api/admin/templates/:id/preview', async (c, { id }) => {
   const t = templateOf(id), D = await c.dir();
-  const { errors, warnings, plan } = planBundle(templateBundle(t, (await c.body()).area), await aiContext(c));
+  const { errors, warnings, plan } = planBundle(templateBundle(t, (await c.body()).area, await langOf(c)), await aiContext(c));
   return plan ? summarize(plan, D, warnings) : { ok: false, errors, warnings };
 }, { admin: true });
 route('POST', '/api/admin/templates/:id/apply', async (c, { id }) => {
   const t = templateOf(id);
-  const { errors, plan } = planBundle(templateBundle(t, (await c.body()).area), await aiContext(c));
+  const { errors, plan } = planBundle(templateBundle(t, (await c.body()).area, await langOf(c)), await aiContext(c));
   if (!plan) throw new HttpError(422, errors[0] || 'This template cannot be added', { errors });
   return applyPlan(c, plan, 'template ' + t.name);
 }, { admin: true });

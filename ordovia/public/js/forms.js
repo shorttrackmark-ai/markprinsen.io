@@ -111,7 +111,7 @@
         if (f.type === 'calc') {
           const v = state.values[f.key];
           const d = f.decimals != null && f.decimals !== '' ? Number(f.decimals) : 2;
-          $('output', box).textContent = v == null ? '–' : typeof v === 'number' ? v.toLocaleString(undefined, { maximumFractionDigits: d }) : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v);
+          $('output', box).textContent = v == null ? '–' : typeof v === 'number' ? v.toLocaleString(FB.locale(), { maximumFractionDigits: d }) : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v);
         }
       }
     }

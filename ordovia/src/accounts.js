@@ -44,10 +44,10 @@ const WORDS = {
 export const appLink = (c, path) => `${c.url.origin}/#/${path}`;
 
 /** Mail a link. If no mail provider is set up yet, hand the link back so the screen can show it. */
-export async function mailLink(c, { to, name, kind, token }) {
+export async function mailLink(c, { to, name, kind, token, lang }) {
   const s = await c.settings();
   const link = appLink(c, 'account/' + token);
-  const t = (WORDS[s.lang] || WORDS.en)[kind](name, s.company || 'Ordovia', link);
+  const t = (WORDS[lang || s.lang] || WORDS.nl)[kind](name, s.company || 'Ordovia', link);
   const out = await sendMail(c.env, { to, subject: t.subject, text: t.text });
   return out.sent ? { sent: true, to } : { sent: false, to, link };
 }

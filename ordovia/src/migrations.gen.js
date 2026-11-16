@@ -39,5 +39,9 @@ export const MIGRATIONS = [
  {
   "name": "0010_accounts.sql",
   "sql": "CREATE TABLE account_tokens (\n  token_hash TEXT PRIMARY KEY,\n  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,\n  kind TEXT NOT NULL,            \n  new_email TEXT,\n  expires_at TEXT NOT NULL,\n  used_at TEXT,\n  created_at TEXT NOT NULL\n);\nCREATE INDEX account_tokens_person ON account_tokens(person_id);\nALTER TABLE persons ADD COLUMN invited_at TEXT;"
+ },
+ {
+  "name": "0011_language.sql",
+  "sql": "ALTER TABLE persons ADD COLUMN lang TEXT;"
  }
 ];

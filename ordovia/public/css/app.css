@@ -742,3 +742,5 @@ table.register td a:hover { text-decoration: underline; }
 .bill-bar.bad { background: #fdecea; border-color: #c0392b; color: #7a1f14; }
 .note.ok { padding: 8px 12px; margin-bottom: 12px; background: #eaf5ec; border: 1px solid #2e7d32; }
 .row-current { background: var(--surface-2); }
+
+.lang-switch a { color: var(--muted); } .lang-switch a.on { font-weight: 600; color: var(--text); text-decoration: none; }

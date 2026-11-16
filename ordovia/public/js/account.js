@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const FB = window.FB;
-  const { esc, $, toast, modal } = FB.ui;
+  const { esc, $, $$, toast, modal } = FB.ui;
   const api = FB.api;
 
   const box = (main, html) => { main.innerHTML = `<div class="login-wrap"><div class="card login">${html}</div></div>`; };
@@ -55,15 +55,20 @@
     $('#cp', m.root).onclick = async () => { $('#invLink', m.root).select(); try { await navigator.clipboard.writeText(inv.link); toast('Copied', 'ok'); } catch { /* selected: copy by hand */ } };
   };
 
+  /** Language links for pages without a signed-in person. */
+  FB.langSwitchHtml = () => `<p class="small center lang-switch" data-notranslate><a href="#" data-lang="nl" class="${FB.i18n.lang === 'nl' ? 'on' : ''}">Nederlands</a> · <a href="#" data-lang="en" class="${FB.i18n.lang === 'en' ? 'on' : ''}">English</a></p>`;
+  FB.wireLang = (root) => $$('[data-lang]', root).forEach(a => { a.onclick = (e) => { e.preventDefault(); FB.setLang(a.dataset.lang); }; });
+
   /** "Your account" card on the /me page. */
   FB.accountCard = (host, user) => {
-    host.innerHTML = `<h2>Your account</h2><div class="card"><div class="two-col">
+    host.innerHTML = `<h2>Your account</h2><div class="card"><label>Language<select id="langSel" data-notranslate><option value="nl" ${FB.i18n.lang === 'nl' ? 'selected' : ''}>Nederlands</option><option value="en" ${FB.i18n.lang === 'en' ? 'selected' : ''}>English</option></select></label><div class="two-col">
       <form id="pwForm"><h4>Change password</h4><label>Current password<input name="current" type="password" required autocomplete="current-password"></label>
         <label>New password <small class="muted">(at least 8 characters)</small><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
         <button class="btn">Change password</button></form>
       <form id="emForm"><h4>Change e-mail address</h4><p class="small muted">Now: ${esc(user.email)}. We send a confirmation link to the new address.</p>
         <label>New e-mail<input name="email" type="email" required></label><label>Current password<input name="password" type="password" required autocomplete="current-password"></label>
         <button class="btn">Send confirmation</button></form></div></div>`;
+    $('#langSel', host).onchange = (e) => FB.setLang(e.target.value);
     $('#pwForm', host).onsubmit = async (e) => { e.preventDefault(); const f = e.target; try { await api.post('/me/password', { current: f.current.value, password: f.password.value }); f.reset(); toast('Password changed. Other devices are signed out.', 'ok'); } catch (err) { toast(err.message, 'error'); } };
     $('#emForm', host).onsubmit = async (e) => {
       e.preventDefault(); const f = e.target;

@@ -15,7 +15,7 @@ const get = (p) => call('GET', p), post = (p, b) => call('POST', p, b || {}), pu
 
 console.log('setup & login');
 let r = await get('/api/session'); ok(r.data.setup === false && r.data.user === null, 'with no company yet the app shows sign-in and sign-up', r.data);
-r = await post('/api/setup', { company: 'Test BV', name: 'Tester', email: 'tester@example.com', password: 'testtest1', demo: true }); ok(r.status === 200, 'setup with demo data', r);
+r = await post('/api/setup', { company: 'Test BV', name: 'Tester', email: 'tester@example.com', password: 'testtest1', demo: true, lang: 'en' }); ok(r.status === 200, 'setup with demo data', r);
 r = await get('/api/meta'); ok(r.status === 200 && r.data.areas.length === 3, 'meta lists the three demo areas', r.data.areas);
 const forms = r.data.forms; ok(forms.every(f => f.status === 'active'), 'forms are active'); ok(forms.some(f => f.area_id), 'forms have an area');
 

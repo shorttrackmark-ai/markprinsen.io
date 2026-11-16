@@ -13,7 +13,7 @@
   function fmtVal(v) {
     if (v == null || v === '') return '<span class="muted">–</span>';
     if (typeof v === 'boolean') return v ? 'Yes' : 'No';
-    if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toLocaleString(FB.locale(), { maximumFractionDigits: 2 });
     if (Array.isArray(v)) return esc(v.join(', '));
     return esc(v);
   }
