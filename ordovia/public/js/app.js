@@ -72,6 +72,7 @@
       <label>E-mail<input name="email" type="email" autocomplete="username" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn primary block">Sign in</button>
+      <p class="small muted center"><a href="#" id="forgot">Forgot your password?</a></p>
       <p class="small muted center">New here? <a href="#" id="newCo">Create your company</a> – free for 14 days.</p>
       ${exampleButton()}
       ${FB.state.settings.demo ? `<div class="demo-users"><p class="small muted">Demo colleagues (password <code>demo1234</code>):</p>
@@ -80,6 +81,7 @@
     </form></div>`;
     wireExample(main);
     $('#newCo', main).onclick = (e) => { e.preventDefault(); P.setup(main); };
+    $('#forgot', main).onclick = (e) => { e.preventDefault(); FB.forgotPassword(); };
     const f = $('#loginForm');
     $$('[data-email]', f).forEach(b => b.onclick = () => { f.email.value = b.dataset.email; f.password.value = 'demo1234'; f.requestSubmit(); });
     f.onsubmit = async (e) => {
@@ -287,7 +289,7 @@
     main.innerHTML = `<div class="page handbook"><div class="page-head"><div><a class="crumb" href="#/handbook">← Handbook</a><h1>${esc(h.name)}</h1>
       <p class="muted">${h.area ? `<a href="#/area/${h.area_id}">${esc(h.area)}</a> · ` : ''}Version ${h.version} · last changed ${esc(fmtDate(h.updated_at))}${h.stats && h.stats.runs ? ` · ${h.stats.runs} runs, avg. ${h.stats.avg_hours ?? '–'} h` : ''} ${FB.org.status(h.status)}</p>
       ${h.reviewDue ? `<p class="small ${h.overdue ? 'warn-text' : 'muted'}">${h.overdue ? '⚠ Review was due' : 'Next review'} ${esc(h.reviewDue)}${h.reviewedAt ? ` · last reviewed ${esc(fmtDate(h.reviewedAt).slice(0, 10))}` : ''}</p>` : ''}</div>
-      <div class="actions">${h.canReview ? '<button class="btn" id="hbReview">Mark as reviewed</button>' : ''}${h.canReview ? `<a class="btn" href="#/handbook/${h.id}/insight">Performance</a>` : ''}<button class="btn" onclick="window.print()">Print</button>${FB.isAdmin() ? `<a class="btn" href="#/admin/flows/${h.id}">Edit flow</a>` : ''}</div></div>
+      <div class="actions">${h.canReview ? '<button class="btn" id="hbReview">Mark as reviewed</button>' : ''}${h.canReview ? `<a class="btn" href="#/handbook/${h.id}/insight">Performance</a>` : ''}<button class="btn" data-print>Print</button>${FB.isAdmin() ? `<a class="btn" href="#/admin/flows/${h.id}">Edit flow</a>` : ''}</div></div>
       <div class="doc-grid">
         <div class="card"><h4>Purpose</h4><p>${richText(h.doc.purpose || h.description || '–')}</p></div>
         <div class="card"><h4>Owner</h4><p>${esc(h.owner || h.doc.owner || '–')}</p><h4>Scope</h4><p>${esc(h.doc.scope || '–')}</p></div>
@@ -448,15 +450,16 @@
     main.innerHTML = `<div class="page page-wide"><div class="page-head"><h1>People &amp; tags</h1><div class="actions"><button class="btn" id="nat">Attributes…</button><button class="btn" id="nt">+ Tag</button><button class="btn primary" id="np">+ Person</button></div></div>
       <p class="muted">Tags (department, location, team, …) and attributes (job title, employee number, …) decide who can start a process, who receives a task and who sees which data.</p>
       <div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>E-mail</th>${pfields.map(f => `<th>${esc(f.label)}</th>`).join('')}${cats.map(c => `<th>${esc(c)}</th>`).join('')}<th>Admin</th><th></th></tr></thead><tbody>
-      ${people.map(p => `<tr class="${p.active ? '' : 'inactive'}"><td>${esc(p.name)}</td><td>${esc(p.email)}</td>
+      ${people.map(p => `<tr class="${p.active ? '' : 'inactive'}"><td>${esc(p.name)}${p.invited_at ? ' <span class="tag" title="Has not chosen a password yet">invited</span>' : ''}</td><td>${esc(p.email)}</td>
         ${pfields.map(f => `<td>${p.attrs[f.key] == null || p.attrs[f.key] === '' ? '<span class="muted">–</span>' : esc(String(p.attrs[f.key]))}</td>`).join('')}
         ${cats.map(c => `<td>${tags.filter(t => t.category === c && p.tagIds.includes(t.id)).map(t => `<span class="tag">${esc(t.value)}</span>`).join(' ')}</td>`).join('')}
-        <td>${p.is_admin ? '✓' : ''}</td><td><button class="btn small" data-edit="${p.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>
+        <td>${p.is_admin ? '✓' : ''}</td><td><button class="btn small" data-edit="${p.id}">Edit</button>${p.invited_at ? ` <button class="btn small" data-reinvite="${p.id}">Send invitation again</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
       <h2>Tags</h2><div class="tag-cloud">${cats.map(c => `<div class="card"><h4>${esc(c)}</h4>${tags.filter(t => t.category === c).map(t => `<span class="tag">${esc(t.value)} <button class="tag-x" data-deltag="${t.id}" title="Delete tag">×</button></span>`).join(' ')}</div>`).join('')}</div></div>`;
     const done = async () => { await FB.loadMeta(); FB.render(); };
     $('#np', main).onclick = () => editPerson(null);
     $('#nat', main).onclick = () => editAttributes();
     $$('[data-edit]', main).forEach(b => b.onclick = () => editPerson(Number(b.dataset.edit)));
+    $$('[data-reinvite]', main).forEach(b => b.onclick = async () => { try { FB.showInvite(await api.post('/admin/people/' + b.dataset.reinvite + '/invite', {})); } catch (err) { toast(err.message, 'error'); } });
     $$('[data-deltag]', main).forEach(b => b.onclick = async () => { if (confirm('Delete this tag from everyone?')) { await api.del('/admin/tags/' + b.dataset.deltag); done(); } });
     $('#nt', main).onclick = () => {
       const m = modal('New tag', `<form id="tf"><label>Category<input name="category" list="cats" required placeholder="e.g. Department"><datalist id="cats">${cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist></label>
@@ -475,7 +478,7 @@
       const m = modal(pid ? 'Edit person' : 'New person', `<form id="pf">
         <label>Name<input name="name" required value="${esc(p.name)}"></label>
         <label>E-mail<input name="email" type="email" required value="${esc(p.email)}"></label>
-        <label>Password ${pid ? '<small class="muted">(leave empty to keep)</small>' : '<small class="muted">(at least 8 characters)</small>'}<input name="password" type="password" minlength="8" autocomplete="new-password" ${pid ? '' : 'required'}></label>
+        <label>Password ${pid ? '<small class="muted">(leave empty to keep)</small>' : '<small class="muted">(leave empty: we e-mail an invitation and they choose their own)</small>'}<input name="password" type="password" minlength="8" autocomplete="new-password"></label>
         <fieldset><legend>Absence</legend><div class="row2"><label>Away until<input type="date" name="away_until" value="${esc(p.away_until || '')}"></label><label>Deputy<select name="deputy_id"><option value="">–</option>${people.filter(x => x.id !== pid && x.active).map(x => `<option value="${x.id}" ${x.id === p.deputy_id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label></div></fieldset>
         ${pfields.length ? `<fieldset><legend>Attributes</legend><div class="row2">${pfields.map(f => `<label>${esc(f.label)}${attrInput(f, p.attrs[f.key])}</label>`).join('')}</div></fieldset>` : ''}
         ${cats.map(c => `<fieldset><legend>${esc(c)}</legend>${tags.filter(t => t.category === c).map(t => `<label class="check inline"><input type="checkbox" name="tag" value="${t.id}" ${p.tagIds.includes(t.id) ? 'checked' : ''}><span>${esc(t.value)}</span></label>`).join('')}</fieldset>`).join('')}
@@ -487,7 +490,7 @@
         const f = e.target;
         const body = { name: f.name.value, email: f.email.value, password: f.password.value || undefined, is_admin: f.is_admin.checked, active: f.active.checked, tagIds: $$('input[name="tag"]:checked', f).map(c => Number(c.value)), away_until: f.away_until.value || null, deputy_id: f.deputy_id.value ? Number(f.deputy_id.value) : null,
           attrs: Object.fromEntries(pfields.map(af => { const i = f.elements['attr:' + af.key]; return [af.key, !i ? null : af.type === 'checkbox' ? i.checked : af.type === 'number' ? (i.value === '' ? null : Number(i.value)) : (i.value === '' ? null : i.value)]; })) };
-        try { if (pid) await api.put('/admin/people/' + pid, body); else await api.post('/admin/people', body); m.close(); toast('Saved', 'ok'); done(); }
+        try { let out; if (pid) await api.put('/admin/people/' + pid, body); else out = await api.post('/admin/people', body); m.close(); if (out && out.invite) FB.showInvite(out.invite); else toast('Saved', 'ok'); done(); }
         catch (err) { toast(err.data && err.data.errors ? Object.values(err.data.errors)[0] : err.message, 'error'); }
       };
     }

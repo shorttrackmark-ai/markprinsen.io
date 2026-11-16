@@ -30,6 +30,7 @@
         ${d.changes_made_by_you_as_builder.length ? `<h2>Changes you made as a builder <span class="count">${d.changes_made_by_you_as_builder.length}</span></h2><div class="card">${list(d.changes_made_by_you_as_builder, a => `<li>${esc(a.action)} ${esc(a.entity)} <b>${esc(a.name || '')}</b> <span class="muted small">· ${esc(fmtDate(a.at))}</span></li>`, '')}</div>` : ''}
       </div></div>
       <p class="small muted">Something wrong or out of date? Ask your administrator to correct it. Records that belong to a finished case stay as they are, because the case is a record of what happened.</p></div>`;
+    const acc = document.createElement('div'); main.querySelector('.page').insertBefore(acc, main.querySelector('.two-col')); FB.accountCard(acc, FB.state.user);
     $('#meDl', main).onclick = () => download('ordovia-my-data.json', JSON.stringify(d, null, 2), 'application/json');
   });
 })();

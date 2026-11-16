@@ -117,3 +117,6 @@ On screens up to 800 px: inputs are 16 px (no zoom on focus), larger tap targets
 
 ## Companies (multi-tenant)
 Every company has its own Durable Object database (`TenantDO`, EU) and file prefix; `ControlDO` is the register of companies and sign-in addresses. See docs/TENANCY.md. Code: src/tenantdb.js (D1-shaped adapter), src/tenant-do.js, src/tenancy.js, src/control.js; `Ctx.init()` picks the company per request. Sign-up (`POST /api/setup`) creates a company; sign-in finds it by e-mail. Run the local smoke tests with `--var DATA_REGION:local`: smoke-example, smoke, smoke-tenants.
+
+## Accounts
+An administrator adds a person without a password: they get an invitation link by e-mail and choose their own password (src/accounts.js: single-use links for invite / reset / e-mail change, table account_tokens). "Forgot your password?" on the sign-in page; "Your account" card on /me (change password, change e-mail with confirmation). E-mail goes through src/mail.js: no provider yet, so the screen shows the link to hand over; locally mails land in an outbox (GET /api/dev/outbox, local only). Sign-in is rate limited. Security review: docs/SECURITY.md. Test: scripts/smoke-accounts.mjs (needs a local server with --var DATA_REGION:local).

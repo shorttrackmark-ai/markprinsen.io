@@ -6,6 +6,9 @@ export const CONTROL_MIGRATIONS = [
     CREATE TABLE identities (email TEXT PRIMARY KEY COLLATE NOCASE, tenant_id TEXT NOT NULL REFERENCES tenants(id));
     CREATE INDEX identities_tenant ON identities(tenant_id);
     CREATE TABLE control_settings (key TEXT PRIMARY KEY, value TEXT);` },
+  { name: 'c0002_attempts.sql', sql: `
+    CREATE TABLE attempts (key TEXT PRIMARY KEY, n INTEGER NOT NULL, since TEXT NOT NULL);
+    CREATE TABLE outbox (id INTEGER PRIMARY KEY, at TEXT NOT NULL, to_addr TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL);` },
 ];
 
 export const TENANT_ID = /^[a-f0-9]{12}$/;

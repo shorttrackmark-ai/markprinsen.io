@@ -66,7 +66,7 @@ export function readCookie(req, name) {
 // ---------- directory: people, tags and assignment rules ----------
 export async function loadDirectory(db) {
   const [p, t, pt] = await db.batch([
-    db.prepare('SELECT id, name, email, is_admin, active, attrs, deputy_id, away_until FROM persons ORDER BY name'),
+    db.prepare('SELECT id, name, email, is_admin, active, attrs, deputy_id, away_until, invited_at FROM persons ORDER BY name'),
     db.prepare('SELECT * FROM tags ORDER BY category, value'),
     db.prepare('SELECT person_id, tag_id FROM person_tags'),
   ]);

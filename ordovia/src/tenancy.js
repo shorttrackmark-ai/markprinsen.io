@@ -26,7 +26,7 @@ export function tenantHint(req, url, cookie) {
   const auth = req.headers.get('authorization') || '';
   const bearer = /^bearer\s+ord_([a-f0-9]{12})[a-f0-9]{64}$/i.exec(auth);
   if (bearer) return { id: bearer[1].toLowerCase(), via: 'token' };
-  const pub = /^\/api\/public\/request\/([a-f0-9]{12})[a-f0-9]{24}(?:\/|$)/.exec(url.pathname);
+  const pub = /^\/api\/public\/(?:request|account)\/([a-f0-9]{12})[a-f0-9]{24,40}(?:\/|$)/.exec(url.pathname);
   if (pub) return { id: pub[1], via: 'link' };
   if (cookie && TENANT_ID.test(cookie)) return { id: cookie, via: 'cookie' };
   return null;

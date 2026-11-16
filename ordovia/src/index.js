@@ -17,6 +17,7 @@ import {
   listTenants, legacyTenantId, importLegacy,
 } from './tenancy.js';
 import { isExampleAddress } from './control.js';
+import { issueToken, openToken, useToken, mailLink, limitCheck, limitHit, limitClear, clientIp } from './accounts.js';
 export { TenantDO, ControlDO } from './tenant-do.js';
 
 const SESSION_DAYS = 14;
@@ -118,6 +119,7 @@ export default {
   // Hourly: flag overdue tasks and send reminders to the notification webhook.
   async scheduled(event, env, exec) {
     if (env.DB_DEMO && new Date(event.scheduledTime).getUTCHours() === 3) exec.waitUntil(resetDemo(env.DB_DEMO, env.FILES_DEMO));   // (the example starts fresh every night)
+    try { await run(await controlDB(env), 'DELETE FROM attempts WHERE since < ?', new Date(Date.now() - 86400000).toISOString().slice(0, 19).replace('T', ' ')); } catch (e) { console.warn('attempts cleanup failed', e.message); }
     // every company gets its own turn; one company failing never stops the others
     for (const t of await listTenants(env).catch(() => [])) {
       try { await hourly(tenantDB(env, t.id), tenantFiles(env, t.id), exec); } catch (e) { console.warn('hourly job failed for', t.id, e.message); }
@@ -130,6 +132,7 @@ export default {
 /** The hourly chores of one company: tidy loose uploads, mark overdue tasks, send reminders. */
 async function hourly(db, files, exec) {
   await cleanLooseFiles(db, files);
+  await run(db, 'DELETE FROM account_tokens WHERE expires_at < ?', new Date(Date.now() - 86400000).toISOString().slice(0, 19).replace('T', ' ')).catch(() => {});
   const due = await overdueCheck(db);
   if (!due.length) return;
   const hook = await first(db, "SELECT value FROM settings WHERE key = 'notify_webhook'"), fmt = await first(db, "SELECT value FROM settings WHERE key = 'notify_format'");
@@ -219,6 +222,9 @@ const NO_HASH = 'pbkdf2$1$AAAAAAAAAAAAAAAAAAAAAA==$x';
 route('POST', '/api/login', async (c) => {
   const b = await c.body();
   const email = String(b.email || '').trim(), password = String(b.password || '');
+  const ctl0 = c.demo ? null : await controlDB(c.env);
+  const lim = [`login:e:${email.toLowerCase()}`, `login:i:${clientIp(c.req)}`];
+  if (ctl0) await limitCheck(ctl0, lim, [8, 40], 900);
   if (!c.demo) {
     // which company? the one this e-mail address belongs to (example people: the company of this browser)
     const ctl = await controlDB(c.env);
@@ -228,13 +234,17 @@ route('POST', '/api/login', async (c) => {
       const lp = await first(c.env.DB, 'SELECT pw_hash FROM persons WHERE email = ? AND active = 1', email);
       if (lp && await verifyPassword(password, lp.pw_hash)) tid = await importLegacy(c.env);
     }
-    if (!tid) { await verifyPassword(password, NO_HASH); throw new HttpError(401, 'Wrong e-mail or password'); }
+    if (!tid) { await verifyPassword(password, NO_HASH); await limitHit(ctl0, lim, 900); throw new HttpError(401, 'Wrong e-mail or password'); }
     c.useTenant(tid);
   }
   const p = await first(c.db, 'SELECT id, pw_hash FROM persons WHERE email = ? AND active = 1', email);
   // Always run the hash so timing does not reveal whether the e-mail exists.
   const ok = await verifyPassword(password, p ? p.pw_hash : NO_HASH);
-  if (!p || !ok) throw new HttpError(401, 'Wrong e-mail or password');
+  if (!p || !ok) {
+    if (ctl0) { const n = await limitHit(ctl0, lim, 900); if (n === 8 && c.db) await logAudit(c, 'paused', 'account', p ? p.id : null, email, '8 failed sign-ins in a row; signing in with this address is paused for 15 minutes'); }
+    throw new HttpError(401, 'Wrong e-mail or password');
+  }
+  if (ctl0) await limitClear(ctl0, lim[0]);
   await startSession(c, p.id);
   if (c.tenantId) c.cookies.push(c.tenantCookie());
   return { ok: true };
@@ -245,6 +255,87 @@ route('POST', '/api/logout', async (c) => {
   if (token && c.db) await run(c.db, 'DELETE FROM sessions WHERE token_hash = ?', await sha256(token));
   c.cookies.push(sessionCookie('', 0, c.cookieName));
   return { ok: true };
+}, { public: true, noCompany: true });
+
+// ---------------------------------------------------------------- account links: invitation, password reset, new e-mail address
+route('GET', '/api/public/account/:token', async (c, { token }) => {
+  const t = await openToken(c, token);
+  return { kind: t.kind, name: t.name, email: t.kind === 'email' ? t.new_email : t.email, company: (await c.settings()).company || 'Ordovia' };
+}, { public: true });
+route('POST', '/api/public/account/:token', async (c, { token }) => {
+  const t = await openToken(c, token), b = await c.body();
+  if (t.kind === 'email') {
+    const ctl = await controlDB(c.env);
+    await claimEmail(ctl, c.tenantId, t.new_email);   // (refused when another company already uses it)
+    if (await first(c.db, 'SELECT 1 FROM persons WHERE email = ? AND id != ?', t.new_email, t.person_id)) throw new HttpError(409, 'E-mail already in use');
+    await useToken(c, t);
+    await run(c.db, 'UPDATE persons SET email = ? WHERE id = ?', t.new_email, t.person_id);
+    await releaseEmail(ctl, c.tenantId, t.email);
+    c.user = { id: t.person_id }; await logAudit(c, 'changed', 'account', t.person_id, t.name, 'e-mail address changed (confirmed by link)');
+    return { ok: true, kind: 'email' };
+  }
+  const pw = String(b.password || '');
+  if (pw.length < 8) throw new HttpError(400, 'Use a password of at least 8 characters');
+  await useToken(c, t);
+  await c.db.batch([
+    c.db.prepare('UPDATE persons SET pw_hash = ?, invited_at = NULL WHERE id = ?').bind(await hashPassword(pw), t.person_id),
+    c.db.prepare('DELETE FROM sessions WHERE person_id = ?').bind(t.person_id),   // (a reset signs out every other device)
+  ]);
+  c.user = { id: t.person_id };
+  await logAudit(c, t.kind === 'invite' ? 'accepted' : 'reset', 'account', t.person_id, t.name, t.kind === 'invite' ? 'invitation accepted' : 'password reset by link');
+  await startSession(c, t.person_id);
+  c.cookies.push(c.tenantCookie());
+  return { ok: true, kind: t.kind };
+}, { public: true });
+
+// "Forgot my password": always the same answer, so nobody can find out who has an account.
+route('POST', '/api/forgot', async (c) => {
+  const email = String((await c.body()).email || '').trim();
+  const ctl = await controlDB(c.env);
+  const keys = [`forgot:e:${email.toLowerCase()}`, `forgot:i:${clientIp(c.req)}`];
+  try {
+    await limitCheck(ctl, keys, [5, 20], 3600);
+    await limitHit(ctl, keys, 3600);
+    const tid = await tenantOfEmail(ctl, email);
+    if (tid) {
+      c.useTenant(tid);
+      const p = await first(c.db, 'SELECT id, name, email FROM persons WHERE email = ? AND active = 1', email);
+      if (p) await mailLink(c, { to: p.email, name: p.name, kind: 'reset', token: await issueToken(c, p.id, 'reset') });
+    }
+  } catch (e) { if (!(e instanceof HttpError)) console.warn('forgot failed', e.message); }
+  return { ok: true };
+}, { public: true, noCompany: true });
+
+route('POST', '/api/me/password', async (c) => {
+  const b = await c.body();
+  const p = await first(c.db, 'SELECT pw_hash FROM persons WHERE id = ?', c.user.id);
+  if (!(await verifyPassword(String(b.current || ''), p.pw_hash))) throw new HttpError(403, 'Your current password is not correct');
+  if (String(b.password || '').length < 8) throw new HttpError(400, 'Use a password of at least 8 characters');
+  const mine = await sha256(readCookie(c.req, c.cookieName) || '');
+  await c.db.batch([
+    c.db.prepare('UPDATE persons SET pw_hash = ? WHERE id = ?').bind(await hashPassword(String(b.password)), c.user.id),
+    c.db.prepare('DELETE FROM sessions WHERE person_id = ? AND token_hash != ?').bind(c.user.id, mine),   // (other devices are signed out)
+  ]);
+  await logAudit(c, 'changed', 'account', c.user.id, c.user.name, 'own password changed');
+  return { ok: true };
+});
+route('POST', '/api/me/email', async (c) => {
+  if (c.demo) throw new HttpError(403, 'Not in the example.');
+  const b = await c.body(), email = String(b.email || '').trim();
+  const p = await first(c.db, 'SELECT pw_hash FROM persons WHERE id = ?', c.user.id);
+  if (!(await verifyPassword(String(b.password || ''), p.pw_hash))) throw new HttpError(403, 'Your current password is not correct');
+  if (!/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, 'Enter a valid e-mail address');
+  if (email.toLowerCase() === String(c.user.email).toLowerCase()) throw new HttpError(400, 'That is already your address');
+  const ctl = await controlDB(c.env);
+  if ((!isExampleAddress(email) && await tenantOfEmail(ctl, email)) || await first(c.db, 'SELECT 1 FROM persons WHERE email = ?', email)) throw new HttpError(409, 'That address is already in use.');
+  await run(c.db, "DELETE FROM account_tokens WHERE person_id = ? AND kind = 'email'", c.user.id);
+  return mailLink(c, { to: email, name: c.user.name, kind: 'email', token: await issueToken(c, c.user.id, 'email', email) });
+});
+
+// Local testing only: the mails that would have been sent.
+route('GET', '/api/dev/outbox', async (c) => {
+  if (c.env.DATA_REGION !== 'local') throw new HttpError(404, 'Unknown endpoint');
+  return all(await controlDB(c.env), 'SELECT at, to_addr, subject, body FROM outbox ORDER BY id DESC LIMIT 20');
 }, { public: true, noCompany: true });
 
 // ---------------------------------------------------------------- shared lookups
@@ -822,7 +913,7 @@ async function savePerson(c, pid, b) {
   const ctl = c.tenantId ? await controlDB(c.env) : null;
   if (ctl && email !== prevEmail) await claimEmail(ctl, c.tenantId, email);
   if (b.password && String(b.password).length < 8) throw new HttpError(400, 'Use a password of at least 8 characters');
-  if (!pid && !b.password) throw new HttpError(400, 'Set a password for the new person');
+  const invite = !pid && !b.password;   // no password given: the person is invited by e-mail and chooses their own
   if (pid === c.user.id && (!b.is_admin || !b.active)) throw new HttpError(400, 'You cannot remove your own admin rights or deactivate yourself');
   // attributes (function, employee number, ...): checked against the fields defined for the Person class, in the standard formats
   let attrs = null;
@@ -835,10 +926,10 @@ async function savePerson(c, pid, b) {
   const away = b.away_until !== undefined || b.deputy_id !== undefined ? await cleanAway(c, pid || 0, b) : null;
   const hash = b.password ? await hashPassword(String(b.password)) : null;
   let id = pid;
-  if (!pid) id = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at) VALUES (?,?,?,?,?,?)', name, email, hash, b.is_admin ? 1 : 0, b.active === false ? 0 : 1, now());
+  if (!pid) id = await run(c.db, 'INSERT INTO persons(name, email, pw_hash, is_admin, active, created_at, invited_at) VALUES (?,?,?,?,?,?,?)', name, email, invite ? 'invited' : hash, b.is_admin ? 1 : 0, b.active === false ? 0 : 1, now(), invite ? now() : null);
   const st = [];
   if (pid) {
-    st.push(c.db.prepare(`UPDATE persons SET name = ?, email = ?, is_admin = ?, active = ?${hash ? ', pw_hash = ?' : ''} WHERE id = ?`).bind(...[name, email, b.is_admin ? 1 : 0, b.active ? 1 : 0].concat(hash ? [hash] : [], [pid])));
+    st.push(c.db.prepare(`UPDATE persons SET name = ?, email = ?, is_admin = ?, active = ?${hash ? ', pw_hash = ?, invited_at = NULL' : ''} WHERE id = ?`).bind(...[name, email, b.is_admin ? 1 : 0, b.active ? 1 : 0].concat(hash ? [hash] : [], [pid])));
     if (hash || !b.active) st.push(c.db.prepare('DELETE FROM sessions WHERE person_id = ? AND ? = 0').bind(pid, pid === c.user.id ? 1 : 0));
   }
   if (attrs !== null) st.push(c.db.prepare('UPDATE persons SET attrs = ? WHERE id = ?').bind(attrs, id));
@@ -847,8 +938,22 @@ async function savePerson(c, pid, b) {
   for (const tid of (b.tagIds || []).map(Number).filter(Number.isInteger)) st.push(c.db.prepare('INSERT OR IGNORE INTO person_tags(person_id, tag_id) VALUES (?,?)').bind(id, tid));
   await c.db.batch(st);
   if (ctl && prevEmail && prevEmail !== email) await releaseEmail(ctl, c.tenantId, prevEmail);
+  if (invite && !c.demo) { const inv = await sendInvite(c, id); c.note(name, 'invited by e-mail'); return { id, invite: inv }; }
   return { id };
 }
+/** (Re)send the invitation of a person who has not chosen a password yet. */
+async function sendInvite(c, personId) {
+  const p = await first(c.db, 'SELECT id, name, email FROM persons WHERE id = ?', personId);
+  await run(c.db, 'DELETE FROM account_tokens WHERE person_id = ? AND kind = ?', personId, 'invite');
+  return mailLink(c, { to: p.email, name: p.name, kind: 'invite', token: await issueToken(c, personId, 'invite') });
+}
+route('POST', '/api/admin/people/:id/invite', async (c, { id }) => {
+  const p = await first(c.db, 'SELECT id, name, invited_at FROM persons WHERE id = ?', Number(id));
+  if (!p) throw new HttpError(404, 'Person not found');
+  if (!p.invited_at) throw new HttpError(400, 'This person already chose a password.');
+  c.note(p.name, 'invitation sent again');
+  return sendInvite(c, p.id);
+}, { admin: true });
 // The Person class: which attributes every person has (function, employee number, ...). Same field definitions as forms, without links and files.
 const PERSON_FIELD_TYPES = ['text', 'textarea', 'number', 'email', 'date', 'select', 'radio', 'checkbox'];
 async function personFields(c) { return parse((await c.settings()).person_fields, []); }
