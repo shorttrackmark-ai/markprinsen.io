@@ -115,6 +115,7 @@ export default {
       throw new HttpError(404, 'Unknown endpoint');
     } catch (e) {
       if (e instanceof HttpError) return reply({ error: e.message, ...(e.extra || {}) }, e.status);
+      if (/Unknown workspace/.test(String(e.message)) && url.pathname === '/api/session') return reply({ setup: false, user: null, settings: { company: 'Ordovia', color: '', lang: null, demo: false, demoSite: false, canTryExample: !!env.DB_DEMO, billing: null } }, 200, { 'set-cookie': sessionCookie('', 0, TENANT_COOKIE) });   // (a browser of a company that no longer exists just sees the sign-in page)
       if (/Unknown workspace/.test(String(e.message))) return url.pathname.startsWith('/api/public/') ? reply({ error: 'This form does not exist' }, 404) : reply({ error: 'Please sign in' }, 401, { 'set-cookie': sessionCookie('', 0, TENANT_COOKIE) });
       console.error(e);
       c.exec.waitUntil(recordError(env, 'server', req.method + ' ' + url.pathname.replace(/[a-f0-9]{24,}/g, ':token').replace(/\/\d+/g, '/:id'), e.message, c.tenantId));

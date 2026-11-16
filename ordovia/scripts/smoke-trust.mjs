@@ -71,6 +71,8 @@ r = await A2.post('/api/admin/delete-company', { confirm: 'Vertrouwen BV' }); ok
 r = await browser().post('/api/login', { email: `vera.${run}@trust.test`, password: 'password123' }); ok(r.status === 401, 'nobody can sign in to it any more');
 r = await browser().post('/api/login', { email: `pia.${run}@trust.test`, password: 'password123' }); ok(r.status === 401, 'not the colleagues either');
 r = await A2.get('/api/home'); ok(r.status === 401, 'the old session is dead');
+r = await colleague.get('/api/session'); ok(r.status === 200 && r.data.user === null, 'a colleague browser that still has the old cookie just sees the sign-in page', r);
+r = await colleague.get('/api/home'); ok(r.status === 401, 'and nothing else');
 const D = browser(); r = await D.post('/api/setup', { company: 'Vertrouwen again', name: 'Vera', email: `vera.${run}@trust.test`, password: 'password123' }); ok(r.status === 200, 'the address can be used for a new company');
 r = await D.get('/api/meta'); ok(r.data.forms.length === 0 && r.data.people.length === 1, 'which starts empty');
 r = await C.get('/api/home'); ok(r.status === 200, 'another company is not affected');

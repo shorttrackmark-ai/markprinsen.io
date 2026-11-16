@@ -73,7 +73,7 @@ class SqlObject extends DurableObject {
     });
   }
   /** Remove everything (a failed import, or a company that left and asked for deletion). */
-  wipe() { return this.ctx.storage.deleteAll(); }
+  async wipe() { await this.ctx.storage.deleteAll(); this.ready = false; }   // (a deleted company must not answer any more)
 }
 
 export class TenantDO extends SqlObject { migrations() { return MIGRATIONS; } }
