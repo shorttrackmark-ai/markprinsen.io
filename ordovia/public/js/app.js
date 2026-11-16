@@ -76,6 +76,7 @@
       <label>E-mail<input name="email" type="email" autocomplete="username" required></label>
       <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
       <button class="btn primary block">Sign in</button>
+      ${FB.msButton('/api/ms/start?mode=login', 'Sign in with Microsoft')}
       <p class="small muted center"><a href="#" id="forgot">Forgot your password?</a></p>
       <p class="small muted center">New here? <a href="#" id="newCo">Create your company</a> – free for 14 days.</p>
       ${exampleButton()}

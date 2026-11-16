@@ -19,3 +19,5 @@
 **Not done yet / known limits.** No two-factor sign-in. No per-IP limit on sign-up. E-mail sending needs a provider (see mail.js); until then invitation links are shown to the administrator to hand over.
 
 **Trust (Phase 5).** Per-company nightly backups (30 days, in the EU bucket, private: they contain password fingerprints and are never offered for download); the downloadable export contains no password or token fingerprints. Restore and delete need the company name typed. Errors are recorded without content. Not done: automatic deletion of the data of lapsed subscriptions (the terms say "[90] days"; for now deletion happens when the company asks), alerts by e-mail when errors rise (needs the mail provider), restoring from an uploaded export.
+
+**Microsoft sign-in (Phase 7).** Accounts are matched on Microsoft's tenant id + user id, never on e-mail; linking is done by the person (or through an invitation); one-time state + cookie + nonce + PKCE; ID tokens verified (RS256 only, issuer, audience, expiry, nonce, key by id with refresh). See MICROSOFT.md.

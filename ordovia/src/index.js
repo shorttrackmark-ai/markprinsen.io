@@ -16,11 +16,12 @@ import {
   TENANT_COOKIE, controlDB, tenantDB, tenantStub, tenantFiles, tenantHint, isLegacyCredential, createTenant, claimEmail, releaseEmail, tenantOfEmail,
   listTenants, legacyTenantId, importLegacy, syncIdentities, deleteTenant,
 } from './tenancy.js';
-import { isExampleAddress } from './control.js';
+import { isExampleAddress, TENANT_ID } from './control.js';
 import { billingOn, billingState, assertWritable, seatLimit, billingPage, startCheckout, startPortal, verifySignature, handleEvent, recordUsage } from './billing.js';
 import { TRIAL_DAYS, TIERS, tierOf } from './plans.js';
 import { localize, trText } from './localize.js';
 import { snapshot, restoreSnapshot, exportZip } from './backup.js';
+import { msOn, newAttempt, authorizeUrl, exchangeCode, verifyIdToken } from './msauth.js';
 import { stripe } from './billing.js';
 import { issueToken, openToken, useToken, mailLink, limitCheck, limitHit, limitClear, clientIp } from './accounts.js';
 export { TenantDO, ControlDO } from './tenant-do.js';
@@ -127,6 +128,7 @@ export default {
   // Hourly: flag overdue tasks and send reminders to the notification webhook.
   async scheduled(event, env, exec) {
     if (env.DB_DEMO && new Date(event.scheduledTime).getUTCHours() === 3) exec.waitUntil(resetDemo(env.DB_DEMO, env.FILES_DEMO));   // (the example starts fresh every night)
+    try { await run(await controlDB(env), 'DELETE FROM oauth_states WHERE created_at < ?', new Date(Date.now() - 3600000).toISOString().slice(0, 19).replace('T', ' ')); } catch (e) { /* ignore */ }
     try { await run(await controlDB(env), 'DELETE FROM errors WHERE at < ?', new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 19).replace('T', ' ')); } catch (e) { /* ignore */ }
     try { await run(await controlDB(env), 'DELETE FROM attempts WHERE since < ?', new Date(Date.now() - 86400000).toISOString().slice(0, 19).replace('T', ' ')); } catch (e) { console.warn('attempts cleanup failed', e.message); }
     // every company gets its own turn; one company failing never stops the others
@@ -181,7 +183,7 @@ async function authenticate(c) {
   }
   const token = readCookie(c.req, c.cookieName);
   if (!token || !c.db) return;
-  const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin, p.deputy_id, p.away_until, p.lang FROM sessions s JOIN persons p ON p.id = s.person_id
+  const s = await first(c.db, `SELECT p.id, p.name, p.email, p.is_admin, p.deputy_id, p.away_until, p.lang, (p.ms_oid IS NOT NULL) AS ms_linked FROM sessions s JOIN persons p ON p.id = s.person_id
     WHERE s.token_hash = ? AND s.expires_at > ? AND p.active = 1`, await sha256(token), now());
   if (s) c.user = s;
 }
@@ -196,11 +198,11 @@ async function startSession(c, personId) {
 }
 
 route('GET', '/api/session', async (c) => {
-  if (!c.db) return { setup: false, user: null, settings: { company: 'Ordovia', color: '', demo: false, demoSite: false, canTryExample: !!c.env.DB_DEMO } };
+  if (!c.db) return { setup: false, user: null, settings: { company: 'Ordovia', color: '', demo: false, demoSite: false, canTryExample: !!c.env.DB_DEMO, microsoft: msOn(c.env) } };
   const any = await first(c.db, 'SELECT id FROM persons LIMIT 1');
   const s = await c.settings();
   const bill = c.user && c.tenantId ? await billingState(c) : null;
-  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', lang: s.lang || null, demo: s.demo === '1', demoSite: c.demo, canTryExample: !c.demo && !!c.env.DB_DEMO, billing: bill && bill.on ? { access: bill.access, status: bill.status, banner: bill.banner, daysLeft: bill.daysLeft } : null } };
+  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', lang: s.lang || null, demo: s.demo === '1', demoSite: c.demo, canTryExample: !c.demo && !!c.env.DB_DEMO, microsoft: msOn(c.env), billing: bill && bill.on ? { access: bill.access, status: bill.status, banner: bill.banner, daysLeft: bill.daysLeft } : null } };
 }, { public: true, noCompany: true });
 
 // A new company: its own database, its first administrator, optionally the example people and processes.
@@ -278,7 +280,7 @@ route('POST', '/api/logout', async (c) => {
 // ---------------------------------------------------------------- account links: invitation, password reset, new e-mail address
 route('GET', '/api/public/account/:token', async (c, { token }) => {
   const t = await openToken(c, token);
-  return { kind: t.kind, name: t.name, email: t.kind === 'email' ? t.new_email : t.email, company: (await c.settings()).company || 'Ordovia' };
+  return { kind: t.kind, name: t.name, email: t.kind === 'email' ? t.new_email : t.email, company: (await c.settings()).company || 'Ordovia', microsoft: msOn(c.env) && t.kind === 'invite' };
 }, { public: true });
 route('POST', '/api/public/account/:token', async (c, { token }) => {
   const t = await openToken(c, token), b = await c.body();
@@ -354,6 +356,85 @@ route('POST', '/api/me/email', async (c) => {
   if ((!isExampleAddress(email) && await tenantOfEmail(ctl, email)) || await first(c.db, 'SELECT 1 FROM persons WHERE email = ?', email)) throw new HttpError(409, 'That address is already in use.');
   await run(c.db, "DELETE FROM account_tokens WHERE person_id = ? AND kind = 'email'", c.user.id);
   return mailLink(c, { to: email, name: c.user.name, kind: 'email', token: await issueToken(c, c.user.id, 'email', email) });
+}, { allowReadOnly: true });
+
+// ---------------------------------------------------------------- Microsoft sign-in (Entra ID). Off until MS_CLIENT_ID and the secret MS_CLIENT_SECRET exist.
+const OAUTH_COOKIE = 'ordovia_oauth';
+const go = (url, cookies = []) => { const h = new Headers({ location: url }); for (const ck of cookies) h.append('set-cookie', ck); return new Response(null, { status: 302, headers: h }); };
+const oauthCookie = (v, age) => `${OAUTH_COOKIE}=${v}; Path=/api/ms; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
+route('GET', '/api/ms/start', async (c) => {
+  if (!msOn(c.env)) throw new HttpError(404, 'Microsoft sign-in is not switched on.');
+  const mode = c.url.searchParams.get('mode') || 'login', ctl = await controlDB(c.env);
+  let tenantId = null, personId = null, extra = null;
+  if (mode === 'link') {
+    if (!c.user || !c.tenantId) throw new HttpError(401, 'Please sign in first.');
+    tenantId = c.tenantId; personId = c.user.id;
+  } else if (mode === 'invite') {
+    const tok = String(c.url.searchParams.get('token') || '');
+    if (!TENANT_ID.test(tok.slice(0, 12))) throw new HttpError(404, 'This link does not work (any more).');
+    c.useTenant(tok.slice(0, 12));
+    const t = await openToken(c, tok).catch(() => null);   // (a link of a company that does not exist is just a link that does not work)
+    if (!t || t.kind !== 'invite') throw new HttpError(404, 'This link does not work (any more).');
+    tenantId = c.tenantId; personId = t.person_id; extra = tok;
+  } else if (mode !== 'login') throw new HttpError(400, 'Unknown mode');
+  const a = await newAttempt();
+  await run(ctl, 'INSERT INTO oauth_states(state, nonce, verifier, mode, tenant_id, person_id, extra, created_at) VALUES (?,?,?,?,?,?,?,?)', a.state, a.nonce, a.verifier, mode, tenantId, personId, extra, now());
+  return go(authorizeUrl(c.env, c.url.origin + '/api/ms/callback', a), [oauthCookie(a.state, 600)]);
+}, { public: true, noCompany: true, allowReadOnly: true });
+
+route('GET', '/api/ms/callback', async (c) => {
+  if (!msOn(c.env)) throw new HttpError(404, 'Microsoft sign-in is not switched on.');
+  const q = c.url.searchParams, state = String(q.get('state') || ''), code = String(q.get('code') || ''), home = c.url.origin + '/app/#/';
+  const done = (where) => go(home + where, [oauthCookie('', 0)]);
+  const ctl = await controlDB(c.env);
+  const st = state ? await first(ctl, 'SELECT * FROM oauth_states WHERE state = ?', state) : null;
+  if (st) await run(ctl, 'DELETE FROM oauth_states WHERE state = ?', state);   // (an attempt is used once)
+  if (!st || q.get('error') || !code || readCookie(c.req, OAUTH_COOKIE) !== state || Date.parse(st.created_at.replace(' ', 'T') + 'Z') < Date.now() - 600000) return done('ms-failed');
+  let who;
+  try { who = await verifyIdToken(c.env, await exchangeCode(c.env, c.url.origin + '/api/ms/callback', code, st.verifier), st.nonce); } catch (e) { console.warn('microsoft sign-in failed', e.message); return done('ms-failed'); }
+  const taken = await first(ctl, 'SELECT tenant_id FROM ms_identities WHERE tid = ? AND oid = ?', who.tid, who.oid);
+  const link = async (tenantId, personId) => {   // one Microsoft account <-> one person
+    if (taken && (taken.tenant_id !== tenantId || !(await first(c.db, 'SELECT 1 FROM persons WHERE id = ? AND ms_tid = ? AND ms_oid = ?', personId, who.tid, who.oid)))) return false;
+    const old = await first(c.db, 'SELECT ms_tid, ms_oid FROM persons WHERE id = ?', personId);
+    if (old && old.ms_oid && (old.ms_tid !== who.tid || old.ms_oid !== who.oid)) await run(ctl, 'DELETE FROM ms_identities WHERE tid = ? AND oid = ?', old.ms_tid, old.ms_oid);
+    try { await run(c.db, 'UPDATE persons SET ms_tid = ?, ms_oid = ? WHERE id = ?', who.tid, who.oid, personId); } catch { return false; }
+    await run(ctl, 'INSERT OR IGNORE INTO ms_identities(tid, oid, tenant_id) VALUES (?,?,?)', who.tid, who.oid, tenantId);
+    return true;
+  };
+  if (st.mode === 'link') {
+    if (!c.user || c.tenantId !== st.tenant_id || c.user.id !== st.person_id) return done('ms-failed');
+    if (!(await link(c.tenantId, c.user.id))) return done('ms-taken');
+    await logAudit(c, 'linked', 'account', c.user.id, c.user.name, 'Microsoft account linked');
+    return done('me');
+  }
+  if (st.mode === 'invite') {
+    c.useTenant(st.tenant_id);
+    const t = await openToken(c, st.extra).catch(() => null);
+    if (!t || t.kind !== 'invite' || t.person_id !== st.person_id) return done('ms-failed');
+    if (!(await link(st.tenant_id, t.person_id))) return done('ms-taken');
+    await useToken(c, t);
+    await run(c.db, 'UPDATE persons SET invited_at = NULL WHERE id = ?', t.person_id);
+    c.user = { id: t.person_id, name: t.name }; await logAudit(c, 'accepted', 'account', t.person_id, t.name, 'invitation accepted with a Microsoft account');
+    await startSession(c, t.person_id); c.cookies.push(c.tenantCookie());
+    return go(home, [oauthCookie('', 0)]);
+  }
+  // sign in: only a Microsoft account that a person has linked
+  if (!taken) return done('ms-unknown');
+  c.useTenant(taken.tenant_id);
+  const p = await first(c.db, 'SELECT id FROM persons WHERE ms_tid = ? AND ms_oid = ? AND active = 1', who.tid, who.oid);
+  if (!p) return done('ms-unknown');
+  await startSession(c, p.id); c.cookies.push(c.tenantCookie());
+  return go(home, [oauthCookie('', 0)]);
+}, { public: true, noCompany: true, allowReadOnly: true });
+
+route('POST', '/api/me/microsoft/unlink', async (c) => {
+  const p = await first(c.db, 'SELECT pw_hash, ms_tid, ms_oid FROM persons WHERE id = ?', c.user.id);
+  if (!p.ms_oid) return { ok: true };
+  if (p.pw_hash === 'invited') throw new HttpError(400, 'You have no password yet. Use “Forgot your password” on the sign-in page to choose one first, so you cannot lock yourself out.');
+  await run(c.db, 'UPDATE persons SET ms_tid = NULL, ms_oid = NULL WHERE id = ?', c.user.id);
+  await run(await controlDB(c.env), 'DELETE FROM ms_identities WHERE tid = ? AND oid = ?', p.ms_tid, p.ms_oid);
+  await logAudit(c, 'unlinked', 'account', c.user.id, c.user.name, 'Microsoft account unlinked');
+  return { ok: true };
 }, { allowReadOnly: true });
 
 // Local testing only: the mails that would have been sent.

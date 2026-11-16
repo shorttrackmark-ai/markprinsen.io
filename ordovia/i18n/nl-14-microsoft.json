@@ -1,0 +1,22 @@
+{
+"Sign in with Microsoft": "Inloggen met Microsoft",
+"Continue with Microsoft": "Doorgaan met Microsoft",
+"or": "of",
+"Microsoft account": "Microsoft-account",
+"Linked: you can sign in with Microsoft.": "Gekoppeld: je kunt inloggen met Microsoft.",
+"Unlink": "Ontkoppelen",
+"Unlinked": "Ontkoppeld",
+"Sign in with your work or school Microsoft account, without a password.": "Log in met je werk- of schoolaccount van Microsoft, zonder wachtwoord.",
+"Link my Microsoft account": "Mijn Microsoft-account koppelen",
+"This Microsoft account is not linked yet": "Dit Microsoft-account is nog niet gekoppeld",
+"Sign in with your e-mail address and password once, open “What Ordovia knows about you” and choose “Link my Microsoft account”. Or ask your administrator for an invitation.": "Log één keer in met je e-mailadres en wachtwoord, open “Wat Ordovia over je weet” en kies “Mijn Microsoft-account koppelen”. Of vraag je beheerder om een uitnodiging.",
+"The Microsoft sign-in did not work": "Inloggen met Microsoft is niet gelukt",
+"Please try again. If it keeps failing, sign in with your password, or ask your administrator.": "Probeer het opnieuw. Lukt het niet, log dan in met je wachtwoord of vraag het je beheerder.",
+"This Microsoft account belongs to someone else": "Dit Microsoft-account hoort bij iemand anders",
+"A Microsoft account can be linked to one person only. Use another account, or ask your administrator.": "Een Microsoft-account kan aan één persoon gekoppeld worden. Gebruik een ander account of vraag het je beheerder.",
+"Microsoft sign-in is not switched on.": "Inloggen met Microsoft staat niet aan.",
+"Please sign in first.": "Log eerst in.",
+"Microsoft did not accept the sign-in.": "Microsoft heeft het inloggen niet geaccepteerd.",
+"The Microsoft sign-in could not be verified.": "Het inloggen met Microsoft kon niet worden geverifieerd.",
+"You have no password yet. Use “Forgot your password” on the sign-in page to choose one first, so you cannot lock yourself out.": "Je hebt nog geen wachtwoord. Gebruik “Wachtwoord vergeten” op de inlogpagina om er eerst een te kiezen, zodat je jezelf niet buitensluit."
+}

@@ -20,6 +20,10 @@ export const CONTROL_MIGRATIONS = [
   { name: 'c0004_errors.sql', sql: `
     CREATE TABLE errors (id INTEGER PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL, place TEXT, message TEXT, tenant_id TEXT);
     CREATE INDEX errors_at ON errors(at);` },
+  { name: 'c0005_microsoft.sql', sql: `
+    CREATE TABLE ms_identities (tid TEXT NOT NULL, oid TEXT NOT NULL, tenant_id TEXT NOT NULL REFERENCES tenants(id), PRIMARY KEY (tid, oid));
+    CREATE INDEX ms_identities_tenant ON ms_identities(tenant_id);
+    CREATE TABLE oauth_states (state TEXT PRIMARY KEY, nonce TEXT NOT NULL, verifier TEXT NOT NULL, mode TEXT NOT NULL, tenant_id TEXT, person_id INTEGER, extra TEXT, created_at TEXT NOT NULL);` },
 ];
 
 export const TENANT_ID = /^[a-f0-9]{12}$/;

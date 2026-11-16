@@ -25,7 +25,7 @@
       <p class="muted">${invite ? 'Choose a password for your account. You will sign in with <b>' + esc(d.email) + '</b>.' : 'For the account <b>' + esc(d.email) + '</b>. You will be signed out on all other devices.'}</p>
       <label>Password <small class="muted">(at least 8 characters)</small><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
       <label>Repeat password<input name="again" type="password" minlength="8" required autocomplete="new-password"></label>
-      <button class="btn primary block">${invite ? 'Create my account' : 'Save password'}</button></form>`);
+      <button class="btn primary block">${invite ? 'Create my account' : 'Save password'}</button>${d.microsoft ? `<p class="small muted center">or</p>${FB.msButton('/api/ms/start?mode=invite&token=' + encodeURIComponent(token), 'Continue with Microsoft')}` : ''}</form>`);
     $('#pwf', main).onsubmit = async (e) => {
       e.preventDefault(); const f = e.target;
       if (f.password.value !== f.again.value) { toast('The two passwords are not the same', 'error'); return; }
@@ -34,6 +34,13 @@
     };
     return true;
   }, { public: true });
+
+  // where a Microsoft sign-in ends up when it did not work
+  const msPage = (title, text) => async (main) => { box(main, `<div class="brand big"><span class="logo-mark">◆</span> Ordovia</div><h2>${title}</h2><p class="muted">${text}</p><p><a href="#/">Go to sign-in</a></p>`); return true; };
+  FB.route('/ms-unknown', msPage('This Microsoft account is not linked yet', 'Sign in with your e-mail address and password once, open “What Ordovia knows about you” and choose “Link my Microsoft account”. Or ask your administrator for an invitation.'), { public: true });
+  FB.route('/ms-failed', msPage('The Microsoft sign-in did not work', 'Please try again. If it keeps failing, sign in with your password, or ask your administrator.'), { public: true });
+  FB.route('/ms-taken', msPage('This Microsoft account belongs to someone else', 'A Microsoft account can be linked to one person only. Use another account, or ask your administrator.'), { public: true });
+  FB.msButton = (href, label) => (FB.state.settings.microsoft ? `<a class="btn block ms-btn" href="${href}"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect width="7" height="7" fill="#f25022"/><rect x="9" width="7" height="7" fill="#7fba00"/><rect y="9" width="7" height="7" fill="#00a4ef"/><rect x="9" y="9" width="7" height="7" fill="#ffb900"/></svg> ${label}</a>` : '');
 
   /** Forgot your password? (from the sign-in page) */
   FB.forgotPassword = () => {
@@ -65,9 +72,11 @@
       <form id="pwForm"><h4>Change password</h4><label>Current password<input name="current" type="password" required autocomplete="current-password"></label>
         <label>New password <small class="muted">(at least 8 characters)</small><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
         <button class="btn">Change password</button></form>
+      ${FB.state.settings.microsoft ? `<div><h4>Microsoft account</h4>${user.ms_linked ? '<p class="small muted">Linked: you can sign in with Microsoft.</p><button class="btn" id="msUnlink" type="button">Unlink</button>' : '<p class="small muted">Sign in with your work or school Microsoft account, without a password.</p><a class="btn" href="/api/ms/start?mode=link">Link my Microsoft account</a>'}</div>` : ''}
       <form id="emForm"><h4>Change e-mail address</h4><p class="small muted">Now: ${esc(user.email)}. We send a confirmation link to the new address.</p>
         <label>New e-mail<input name="email" type="email" required></label><label>Current password<input name="password" type="password" required autocomplete="current-password"></label>
         <button class="btn">Send confirmation</button></form></div></div>`;
+    const un = $('#msUnlink', host); if (un) un.onclick = async () => { try { await api.post('/me/microsoft/unlink', {}); toast('Unlinked', 'ok'); FB.state.user.ms_linked = 0; FB.render(); } catch (err) { toast(err.message, 'error'); } };
     $('#langSel', host).onchange = (e) => FB.setLang(e.target.value);
     $('#pwForm', host).onsubmit = async (e) => { e.preventDefault(); const f = e.target; try { await api.post('/me/password', { current: f.current.value, password: f.password.value }); f.reset(); toast('Password changed. Other devices are signed out.', 'ok'); } catch (err) { toast(err.message, 'error'); } };
     $('#emForm', host).onsubmit = async (e) => {

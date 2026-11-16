@@ -745,3 +745,5 @@ table.register td a:hover { text-decoration: underline; }
 
 .lang-switch a { color: var(--muted); } .lang-switch a.on { font-weight: 600; color: var(--text); text-decoration: none; }
 .help-list { padding-left: 20px; margin: 6px 0 12px; } .help-list li { margin: 5px 0; }
+
+.ms-btn { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 8px; text-decoration: none; }

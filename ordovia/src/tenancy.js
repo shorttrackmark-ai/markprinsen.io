@@ -69,6 +69,7 @@ export async function deleteTenant(env, tenantId) {
   await tenantStub(env, tenantId).wipe();
   await run(ctl, 'DELETE FROM identities WHERE tenant_id = ?', tenantId);
   await run(ctl, 'DELETE FROM usage WHERE tenant_id = ?', tenantId);
+  await run(ctl, 'DELETE FROM ms_identities WHERE tenant_id = ?', tenantId);
   await run(ctl, "UPDATE tenants SET status = 'deleted', name = '' WHERE id = ?", tenantId);
 }
 export const listTenants = async (env) => all(await controlDB(env), "SELECT id, name, legacy FROM tenants WHERE status != 'deleted'");

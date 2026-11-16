@@ -51,5 +51,9 @@ export const MIGRATIONS = [
  {
   "name": "0013_doc_approval.sql",
   "sql": "ALTER TABLE document_versions ADD COLUMN stage TEXT NOT NULL DEFAULT 'published';\nALTER TABLE document_versions ADD COLUMN approved_by INTEGER REFERENCES persons(id) ON DELETE SET NULL;\nALTER TABLE document_versions ADD COLUMN approved_at TEXT;"
+ },
+ {
+  "name": "0014_microsoft.sql",
+  "sql": "ALTER TABLE persons ADD COLUMN ms_tid TEXT;\nALTER TABLE persons ADD COLUMN ms_oid TEXT;\nCREATE UNIQUE INDEX persons_ms ON persons(ms_tid, ms_oid) WHERE ms_oid IS NOT NULL;"
  }
 ];
