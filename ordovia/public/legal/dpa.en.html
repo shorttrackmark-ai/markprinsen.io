@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Data processing agreement – Ordovia (draft)</title><link rel="stylesheet" href="legal.css"></head>
+<body>
+<div class="top"><a href="/">← Ordovia</a> · <a href="dpa.nl.html">Nederlands</a> · <a href="terms.en.html">Terms</a> · <a href="privacy.en.html">Privacy</a></div>
+<div class="draft">DRAFT – this is a draft and needs legal review before it is used. Anything in <mark>[brackets]</mark> still has to be filled in or decided.</div>
+<h1>Data processing agreement</h1>
+<p class="meta">Draft 1 · 16 November 2026 · part of the <a href="terms.en.html">terms of service</a></p>
+<p>Parties: the Customer (the “<b>Controller</b>”) and <mark>[company name]</mark>, trading as Ordovia (the “<b>Processor</b>”). This agreement applies automatically once the Customer uses the Service, and for as long as the Processor processes the Customer’s personal data.</p>
+
+<h2>1. Subject</h2>
+<p>The Processor processes personal data on behalf of the Controller only to provide the Service, as described in annex I, and on the Controller’s documented instructions (the agreement, this agreement and the use of the Service). If, in the Processor’s opinion, an instruction infringes the law, the Processor says so.</p>
+
+<h2>2. Confidentiality</h2>
+<p>The Processor ensures that everybody with access to the personal data is bound by confidentiality.</p>
+
+<h2>3. Security</h2>
+<p>The Processor takes appropriate technical and organisational measures, as in annex II, and adjusts them as the state of the art and the risk require.</p>
+
+<h2>4. Sub-processors</h2>
+<p>The Controller gives general authorisation for the sub-processors in annex III. The Processor announces intended changes at least 30 days in advance (in the app or by e-mail); within that period the Controller may object with reasons. The Processor imposes the same obligations on sub-processors and remains responsible for them.</p>
+
+<h2>5. Data subject rights</h2>
+<p>The Processor helps the Controller by appropriate means with requests from data subjects. The Customer can view, correct, export and delete data itself through the Service. If the Processor receives a request directly from a data subject, it refers them to the Controller.</p>
+
+<h2>6. Personal data breaches</h2>
+<p>The Processor notifies the Controller of a breach of the security of personal data without undue delay and at the latest within <mark>[48]</mark> hours of discovery, with the information reasonably available.</p>
+
+<h2>7. Storage location and transfers</h2>
+<p>The Controller’s data is stored in the European Union. Transfers outside the EU only take place where needed for a sub-processor’s service and then with appropriate safeguards (such as standard contractual clauses).</p>
+
+<h2>8. Audit</h2>
+<p>On request the Processor provides the information needed to demonstrate compliance and cooperates with an audit, at most once a year, with reasonable notice and at the Controller’s cost unless the audit shows a shortcoming.</p>
+
+<h2>9. End of processing</h2>
+<p>The Controller can at any time export all data and have it permanently deleted through the Service. After the agreement ends, the Processor deletes the personal data at the latest <mark>[90]</mark> days after the subscription ends (backups at the latest 30 days after that), unless the law requires retention.</p>
+
+<h2>10. Liability and law</h2>
+<p>The terms of service apply to liability. Dutch law applies to this agreement.</p>
+
+<h2>Annex I – Description of the processing</h2>
+<table>
+<tr><th>Item</th><th>Description</th></tr>
+<tr><td>Nature</td><td>Storing, displaying, passing on within processes, exporting and deleting data the Customer enters</td></tr>
+<tr><td>Purpose</td><td>Providing the Service: running processes, forms, documents and dashboards</td></tr>
+<tr><td>Types of personal data</td><td>Name, e-mail address, job title and attributes of employees; what employees and external requesters fill in on forms (the Customer decides the content); who did which step and when</td></tr>
+<tr><td>Data subjects</td><td>The Customer’s employees and users; people about whom the Customer records data on forms (for example customers, suppliers, visitors)</td></tr>
+<tr><td>Special categories</td><td>Not intended; the Customer only puts them in the Service where necessary and permitted, and stays responsible for that</td></tr>
+<tr><td>Duration</td><td>For the duration of the agreement, plus the period in article 9</td></tr>
+</table>
+
+<h2>Annex II – Security measures</h2>
+<ul>
+<li><b>Separation:</b> each company has its own database and its own part of file storage; a session only works inside its own company.</li>
+<li><b>Encryption:</b> connections over HTTPS (HSTS); passwords only as a salted, hashed fingerprint (PBKDF2); sign-in and API tokens stored only as fingerprints.</li>
+<li><b>Access:</b> roles (user/administrator); 14-day sessions with secure cookies; signing out on all devices after a password reset; limits on sign-in attempts; invitation and password-reset links are single-use and time-limited.</li>
+<li><b>Web security:</b> strict Content-Security-Policy, protection against cross-site requests, no inline scripts, no framing.</li>
+<li><b>Logging:</b> administrator actions and account events are recorded; ordinary sign-ins and reading behaviour are not.</li>
+<li><b>Backups and recovery:</b> daily backup per company, kept 30 days, in the EU; restore by the administrator.</li>
+<li><b>Other:</b> data export at any time; error reports without content; automated tests of the separation between companies on every change.</li>
+</ul>
+
+<h2>Annex III – Sub-processors</h2>
+<table>
+<tr><th>Party</th><th>Purpose</th><th>Data</th><th>Location</th></tr>
+<tr><td>Cloudflare, Inc.</td><td>Hosting, database and file storage</td><td>All Customer data (encrypted in transit)</td><td>Storage in the EU (EU jurisdiction); parent company in the US</td></tr>
+<tr><td>Stripe Payments Europe, Ltd.</td><td>Payments and billing</td><td>Only the Customer’s billing data; no Customer data from the Service</td><td>EU/US <mark>[check]</mark></td></tr>
+<tr><td><mark>[e-mail provider, to be chosen]</mark></td><td>Sending invitation and password mails</td><td>Name, e-mail address, link</td><td><mark>[fill in]</mark></td></tr>
+</table>
+</body></html>

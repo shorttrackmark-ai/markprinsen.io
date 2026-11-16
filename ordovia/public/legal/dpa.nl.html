@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Verwerkersovereenkomst – Ordovia (concept)</title><link rel="stylesheet" href="legal.css"></head>
+<body>
+<div class="top"><a href="/">← Ordovia</a> · <a href="dpa.en.html">English</a> · <a href="terms.nl.html">Voorwaarden</a> · <a href="privacy.nl.html">Privacy</a></div>
+<div class="draft">CONCEPT – dit is een conceptversie en moet door een jurist worden getoetst voordat het wordt gebruikt. Wat tussen <mark>[haken]</mark> staat, moet nog worden ingevuld of beslist.</div>
+<h1>Verwerkersovereenkomst</h1>
+<p class="meta">Concept 1 · 16 november 2026 · onderdeel van de <a href="terms.nl.html">algemene voorwaarden</a></p>
+<p>Partijen: de Klant (“<b>Verwerkingsverantwoordelijke</b>”) en <mark>[naam bedrijf]</mark>, handelend onder de naam Ordovia (“<b>Verwerker</b>”). Deze overeenkomst geldt automatisch zodra de Klant de Dienst gebruikt en geldt zolang Verwerker persoonsgegevens van de Klant verwerkt.</p>
+
+<h2>1. Onderwerp</h2>
+<p>Verwerker verwerkt persoonsgegevens namens de Verwerkingsverantwoordelijke uitsluitend om de Dienst te leveren, zoals beschreven in bijlage I, en volgens de documenteerde instructies van de Verwerkingsverantwoordelijke (de overeenkomst, deze overeenkomst en het gebruik van de Dienst). Is een instructie volgens Verwerker in strijd met de wet, dan meldt Verwerker dat.</p>
+
+<h2>2. Vertrouwelijkheid</h2>
+<p>Verwerker zorgt dat iedereen die toegang heeft tot de persoonsgegevens gebonden is aan geheimhouding.</p>
+
+<h2>3. Beveiliging</h2>
+<p>Verwerker neemt passende technische en organisatorische maatregelen, zoals in bijlage II, en past die aan naarmate de stand van de techniek en het risico dat vragen.</p>
+
+<h2>4. Subverwerkers</h2>
+<p>De Verwerkingsverantwoordelijke geeft algemene toestemming voor de subverwerkers in bijlage III. Verwerker meldt voorgenomen wijzigingen minstens 30 dagen vooraf (in de app of per e-mail); de Verwerkingsverantwoordelijke kan binnen die termijn gemotiveerd bezwaar maken. Verwerker legt subverwerkers dezelfde verplichtingen op en blijft verantwoordelijk voor hen.</p>
+
+<h2>5. Rechten van betrokkenen</h2>
+<p>Verwerker helpt de Verwerkingsverantwoordelijke met passende middelen bij verzoeken van betrokkenen. De Klant kan zelf gegevens inzien, corrigeren, exporteren en verwijderen via de Dienst. Ontvangt Verwerker een verzoek rechtstreeks van een betrokkene, dan verwijst zij die naar de Verwerkingsverantwoordelijke.</p>
+
+<h2>6. Datalekken</h2>
+<p>Verwerker meldt een inbreuk op de beveiliging van persoonsgegevens aan de Verwerkingsverantwoordelijke zonder onredelijke vertraging en uiterlijk binnen <mark>[48]</mark> uur na ontdekking, met de informatie die redelijkerwijs beschikbaar is.</p>
+
+<h2>7. Opslaglocatie en doorgifte</h2>
+<p>De gegevens van de Verwerkingsverantwoordelijke worden opgeslagen in de Europese Unie. Doorgifte buiten de EU vindt alleen plaats als dat nodig is voor de dienstverlening van een subverwerker en dan met passende waarborgen (zoals standaardcontractbepalingen).</p>
+
+<h2>8. Controle</h2>
+<p>Verwerker geeft op verzoek de informatie die nodig is om naleving aan te tonen en werkt mee aan een audit, ten hoogste eens per jaar, met redelijke aankondiging en op kosten van de Verwerkingsverantwoordelijke tenzij een audit een tekortkoming aantoont.</p>
+
+<h2>9. Einde van de verwerking</h2>
+<p>De Verwerkingsverantwoordelijke kan op elk moment alle gegevens exporteren en definitief laten verwijderen via de Dienst. Na het einde van de overeenkomst verwijdert Verwerker de persoonsgegevens uiterlijk <mark>[90]</mark> dagen na het einde van het abonnement (back-ups uiterlijk 30 dagen daarna), tenzij de wet bewaren verplicht.</p>
+
+<h2>10. Aansprakelijkheid en recht</h2>
+<p>Voor aansprakelijkheid gelden de algemene voorwaarden. Op deze overeenkomst is Nederlands recht van toepassing.</p>
+
+<h2>Bijlage I – Beschrijving van de verwerking</h2>
+<table>
+<tr><th>Onderdeel</th><th>Beschrijving</th></tr>
+<tr><td>Aard</td><td>Opslaan, tonen, doorsturen binnen processen, exporteren en verwijderen van gegevens die de Klant invoert</td></tr>
+<tr><td>Doel</td><td>Het leveren van de Dienst: processen, formulieren, documenten en dashboards uitvoeren</td></tr>
+<tr><td>Soorten persoonsgegevens</td><td>Naam, e-mailadres, functie en kenmerken van medewerkers; wat medewerkers en externe aanvragers in formulieren invullen (de Klant bepaalt de inhoud); wie welke stap deed en wanneer</td></tr>
+<tr><td>Betrokkenen</td><td>Medewerkers en gebruikers van de Klant; personen over wie de Klant gegevens in formulieren vastlegt (bijvoorbeeld klanten, leveranciers, bezoekers)</td></tr>
+<tr><td>Bijzondere persoonsgegevens</td><td>Niet bedoeld; de Klant zet ze alleen in de Dienst als dat nodig en toegestaan is, en blijft daarvoor zelf verantwoordelijk</td></tr>
+<tr><td>Duur</td><td>Zolang de overeenkomst loopt, plus de termijn in artikel 9</td></tr>
+</table>
+
+<h2>Bijlage II – Beveiligingsmaatregelen</h2>
+<ul>
+<li><b>Scheiding:</b> elk bedrijf heeft een eigen database en een eigen deel van de bestandsopslag; een sessie werkt alleen binnen het eigen bedrijf.</li>
+<li><b>Versleuteling:</b> verbindingen via HTTPS (HSTS); wachtwoorden alleen als versleutelde vingerafdruk met zout (PBKDF2); inlogtokens en API-tokens alleen als vingerafdruk opgeslagen.</li>
+<li><b>Toegang:</b> rollen (gebruiker/beheerder); sessies van 14 dagen met beveiligde cookies; uitloggen op alle apparaten bij een wachtwoordreset; beperking van inlogpogingen; links voor uitnodiging en wachtwoordherstel zijn eenmalig en tijdelijk.</li>
+<li><b>Webbeveiliging:</b> strikte Content-Security-Policy, bescherming tegen cross-site-verzoeken, geen inline scripts, geen framing.</li>
+<li><b>Logboek:</b> beheerdersacties en accountgebeurtenissen worden vastgelegd; gewone inlogs en leesgedrag niet.</li>
+<li><b>Back-ups en herstel:</b> dagelijkse back-up per bedrijf, 30 dagen bewaard, in de EU; herstel door de beheerder.</li>
+<li><b>Overig:</b> data-export op elk moment; storingsmeldingen zonder inhoud; geautomatiseerde tests van de scheiding tussen bedrijven bij elke wijziging.</li>
+</ul>
+
+<h2>Bijlage III – Subverwerkers</h2>
+<table>
+<tr><th>Partij</th><th>Doel</th><th>Gegevens</th><th>Locatie</th></tr>
+<tr><td>Cloudflare, Inc.</td><td>Hosting, database en bestandsopslag</td><td>Alle Klantgegevens (versleuteld in transit)</td><td>Opslag in de EU (EU-jurisdictie); moederbedrijf in de VS</td></tr>
+<tr><td>Stripe Payments Europe, Ltd.</td><td>Betalingen en facturatie</td><td>Alleen facturatiegegevens van de Klant; geen Klantgegevens uit de Dienst</td><td>EU/VS <mark>[controleren]</mark></td></tr>
+<tr><td><mark>[e-mailprovider, nog te kiezen]</mark></td><td>Verzenden van uitnodigings- en wachtwoordmails</td><td>Naam, e-mailadres, link</td><td><mark>[invullen]</mark></td></tr>
+</table>
+</body></html>

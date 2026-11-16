@@ -14,12 +14,14 @@ import { TEMPLATES, PACKS } from './templates.js';
 import { seedDemo, resetDemo, DEMO_ADMIN, DEMO_PASSWORD } from './seed.js';
 import {
   TENANT_COOKIE, controlDB, tenantDB, tenantStub, tenantFiles, tenantHint, isLegacyCredential, createTenant, claimEmail, releaseEmail, tenantOfEmail,
-  listTenants, legacyTenantId, importLegacy,
+  listTenants, legacyTenantId, importLegacy, syncIdentities, deleteTenant,
 } from './tenancy.js';
 import { isExampleAddress } from './control.js';
 import { billingOn, billingState, assertWritable, seatLimit, billingPage, startCheckout, startPortal, verifySignature, handleEvent, recordUsage } from './billing.js';
 import { TRIAL_DAYS, tierOf } from './plans.js';
 import { localize, trText } from './localize.js';
+import { snapshot, restoreSnapshot, exportZip } from './backup.js';
+import { stripe } from './billing.js';
 import { issueToken, openToken, useToken, mailLink, limitCheck, limitHit, limitClear, clientIp } from './accounts.js';
 export { TenantDO, ControlDO } from './tenant-do.js';
 
@@ -115,6 +117,7 @@ export default {
       if (e instanceof HttpError) return reply({ error: e.message, ...(e.extra || {}) }, e.status);
       if (/Unknown workspace/.test(String(e.message))) return url.pathname.startsWith('/api/public/') ? reply({ error: 'This form does not exist' }, 404) : reply({ error: 'Please sign in' }, 401, { 'set-cookie': sessionCookie('', 0, TENANT_COOKIE) });
       console.error(e);
+      c.exec.waitUntil(recordError(env, 'server', req.method + ' ' + url.pathname.replace(/[a-f0-9]{24,}/g, ':token').replace(/\/\d+/g, '/:id'), e.message, c.tenantId));
       const msg = /no such table/i.test(String(e.message)) ? 'Database not initialised – run the D1 migrations (npm run db:migrate:remote).' : 'Server error: ' + e.message;
       return reply({ error: msg }, 500);
     }
@@ -123,10 +126,15 @@ export default {
   // Hourly: flag overdue tasks and send reminders to the notification webhook.
   async scheduled(event, env, exec) {
     if (env.DB_DEMO && new Date(event.scheduledTime).getUTCHours() === 3) exec.waitUntil(resetDemo(env.DB_DEMO, env.FILES_DEMO));   // (the example starts fresh every night)
+    try { await run(await controlDB(env), 'DELETE FROM errors WHERE at < ?', new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 19).replace('T', ' ')); } catch (e) { /* ignore */ }
     try { await run(await controlDB(env), 'DELETE FROM attempts WHERE since < ?', new Date(Date.now() - 86400000).toISOString().slice(0, 19).replace('T', ' ')); } catch (e) { console.warn('attempts cleanup failed', e.message); }
     // every company gets its own turn; one company failing never stops the others
     for (const t of await listTenants(env).catch(() => [])) {
-      try { const tdb = tenantDB(env, t.id); await hourly(tdb, tenantFiles(env, t.id), exec); await recordUsage(env, t.id, tdb); } catch (e) { console.warn('hourly job failed for', t.id, e.message); }
+      try {
+        const tdb = tenantDB(env, t.id), tf = tenantFiles(env, t.id);
+        await hourly(tdb, tf, exec); await recordUsage(env, t.id, tdb);
+        if (new Date(event.scheduledTime).getUTCHours() === 3 && tf) await backupTenant(tdb, tf);   // (every night)
+      } catch (e) { console.warn('hourly job failed for', t.id, e.message); await recordError(env, 'cron', 'hourly', e.message, t.id); }
     }
     // the first workspace, as long as it has not been carried over into a company of its own
     if (env.DB && !(await legacyTenantId(env).catch(() => null))) await hourly(env.DB, env.FILES, exec);
@@ -363,6 +371,90 @@ route('POST', '/api/stripe/webhook', async (c) => {
   if (!(await verifySignature(raw, c.req.headers.get('stripe-signature'), c.env.STRIPE_WEBHOOK_SECRET))) throw new HttpError(400, 'Bad signature');
   let ev; try { ev = JSON.parse(raw); } catch { throw new HttpError(400, 'Bad payload'); }
   return handleEvent(c.env, ev);
+}, { public: true, noCompany: true, allowReadOnly: true });
+
+// ---------------------------------------------------------------- trust: take everything away, backups, restoring, leaving
+async function recordError(env, kind, place, message, tenantId) {
+  try {
+    const ctl = await controlDB(env), m = String(message || '').slice(0, 200), t = (ms) => new Date(Date.now() - ms).toISOString().slice(0, 19).replace('T', ' ');
+    if (await first(ctl, 'SELECT id FROM errors WHERE place = ? AND message = ? AND at > ?', place, m, t(300000))) return;   // (the same problem again within 5 minutes: once is enough)
+    await run(ctl, 'INSERT INTO errors(at, kind, place, message, tenant_id) VALUES (?,?,?,?,?)', now(), kind, String(place || '').slice(0, 120), m, tenantId || null);
+  } catch (e) { console.warn('could not record error', e.message); }
+}
+const BACKUPS = 'backups/';
+/** A backup of one company's data in its own place in the EU bucket; the last 30 nightly ones are kept. */
+async function backupTenant(db, files, label) {
+  const date = now().slice(0, 10), key = BACKUPS + (label || date) + '.json';
+  const body = JSON.stringify(await snapshot(db));
+  await files.put(key, body, { httpMetadata: { contentType: 'application/json' } });
+  const nightly = (await files.list({ prefix: BACKUPS, limit: 500 })).objects.map(o => o.key).filter(k => /^backups\/\d{4}-\d{2}-\d{2}\.json$/.test(k)).sort();
+  for (const old of nightly.slice(0, Math.max(0, nightly.length - 30))) await files.delete(old);
+  return { name: key.slice(BACKUPS.length, -5), size: body.length };
+}
+const needsCompany = (c) => { if (c.demo || !c.tenantId) throw new HttpError(403, 'Not in the example.'); };
+const confirmName = async (c) => {
+  const typed = String((await c.body()).confirm || '').trim().toLowerCase();
+  if (!typed || typed !== String((await c.settings()).company || '').trim().toLowerCase()) throw new HttpError(400, 'Type the name of the company to confirm.');
+};
+
+// Everything the company has, to take away: data.json, a CSV per register, and the files.
+route('GET', '/api/admin/export.zip', async (c) => {
+  needsCompany(c);
+  const company = (await c.settings()).company || 'Ordovia', lang = await langOf(c);
+  const { readable, job } = exportZip({ db: c.db, files: c.files, company, lang });
+  c.exec.waitUntil(job);
+  await logAudit(c, 'exported', 'workspace', null, company, 'full export (ZIP)');
+  return new Response(readable, { headers: { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="ordovia-${slugify(company) || 'export'}-${now().slice(0, 10)}.zip"`, 'cache-control': 'no-store' } });
+}, { admin: true });
+route('GET', '/api/admin/backups', async (c) => {
+  needsCompany(c);
+  const l = await c.files.list({ prefix: BACKUPS, limit: 500 });
+  return l.objects.map(o => ({ name: o.key.slice(BACKUPS.length, -5), size: o.size, at: o.uploaded })).sort((a, b) => (a.name < b.name ? 1 : -1));
+}, { admin: true });
+route('POST', '/api/admin/backups', async (c) => { needsCompany(c); const r = await backupTenant(c.db, c.files, now().slice(0, 10) + '-manual'); c.note(r.name, 'backup made'); return r; }, { admin: true, allowReadOnly: true });
+route('POST', '/api/admin/restore', async (c) => {
+  needsCompany(c); await confirmName(c);
+  const name = String((await c.body()).name || '');
+  if (!/^[A-Za-z0-9-]{4,40}$/.test(name)) throw new HttpError(400, 'Choose a backup.');
+  const obj = await c.files.get(BACKUPS + name + '.json');
+  if (!obj) throw new HttpError(404, 'That backup does not exist (any more).');
+  const snap = JSON.parse(await obj.text());
+  await backupTenant(c.db, c.files, 'before-restore-' + now().replace(/[^0-9]/g, '').slice(0, 14));   // (a safety copy of how it is right now)
+  const r = await restoreSnapshot(tenantStub(c.env, c.tenantId), c.db, snap);
+  await syncIdentities(c.env, c.tenantId, c.db);
+  c._dir = c._forms = c._settings = null;
+  c.cookies.push(sessionCookie('', 0, c.cookieName));   // everybody signs in again
+  return { ok: true, ...r };
+}, { admin: true });
+// The company leaves: everything is removed, for good.
+route('POST', '/api/admin/delete-company', async (c) => {
+  needsCompany(c); await confirmName(c);
+  if (billingOn(c.env)) {
+    const row = await first(await controlDB(c.env), 'SELECT stripe_sub FROM tenants WHERE id = ?', c.tenantId);
+    if (row && row.stripe_sub) await stripe(c.env, 'DELETE', '/subscriptions/' + row.stripe_sub).catch(() => {});   // (no more invoices)
+  }
+  await deleteTenant(c.env, c.tenantId);
+  c.cookies.push(sessionCookie('', 0, c.cookieName), sessionCookie('', 0, TENANT_COOKIE));
+  return { ok: true };
+}, { admin: true, allowReadOnly: true });
+
+// Is everything working? Public; shows no data of anybody.
+route('GET', '/api/status', async (c) => {
+  const comps = [], ctl = await controlDB(c.env).catch(() => null);
+  const check = async (name, fn) => { const t0 = Date.now(); try { await fn(); comps.push({ name, ok: true, ms: Date.now() - t0 }); } catch (e) { comps.push({ name, ok: false, ms: Date.now() - t0 }); } };
+  await check('database', async () => { await first(ctl, 'SELECT 1 AS x'); });
+  await check('files', async () => { if (c.env.FILES_EU) await c.env.FILES_EU.list({ limit: 1 }); });
+  const t = (ms) => new Date(Date.now() - ms).toISOString().slice(0, 19).replace('T', ' ');
+  const e24 = ctl ? (await first(ctl, 'SELECT COUNT(*) AS n FROM errors WHERE at > ?', t(86400000))).n : null, e1 = ctl ? (await first(ctl, 'SELECT COUNT(*) AS n FROM errors WHERE at > ?', t(3600000))).n : null;
+  const status = comps.some(x => !x.ok) ? 'outage' : e1 >= 20 ? 'degraded' : 'operational';
+  return { status, at: now(), components: comps, errors_24h: e24, errors_1h: e1 };
+}, { public: true, noCompany: true, allowReadOnly: true });
+// Problems in the browser (no content, only what went wrong and on which page)
+route('POST', '/api/client-error', async (c) => {
+  const b = await c.body().catch(() => ({})), ctl = await controlDB(c.env), keys = ['cerr:i:' + clientIp(c.req)];
+  try { await limitCheck(ctl, keys, [10], 3600); await limitHit(ctl, keys, 3600); } catch (e) { return { ok: true }; }
+  await recordError(c.env, 'browser', String(b.page || '').split('?')[0].replace(/\/\d+/g, '/:id').slice(0, 120), b.message, c.tenantId);
+  return { ok: true };
 }, { public: true, noCompany: true, allowReadOnly: true });
 
 // ---------------------------------------------------------------- shared lookups

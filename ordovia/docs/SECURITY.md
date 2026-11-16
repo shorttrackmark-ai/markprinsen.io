@@ -17,3 +17,5 @@
 **Audit log.** Administrator actions are logged automatically; account events too (invitation accepted, password reset, own password changed, e-mail changed, sign-in paused). Ordinary sign-ins are NOT logged (see "no surveillance" in the principles).
 
 **Not done yet / known limits.** No two-factor sign-in. No per-IP limit on sign-up. E-mail sending needs a provider (see mail.js); until then invitation links are shown to the administrator to hand over.
+
+**Trust (Phase 5).** Per-company nightly backups (30 days, in the EU bucket, private: they contain password fingerprints and are never offered for download); the downloadable export contains no password or token fingerprints. Restore and delete need the company name typed. Errors are recorded without content. Not done: automatic deletion of the data of lapsed subscriptions (the terms say "[90] days"; for now deletion happens when the company asks), alerts by e-mail when errors rise (needs the mail provider), restoring from an uploaded export.

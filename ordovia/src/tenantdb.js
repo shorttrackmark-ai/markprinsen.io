@@ -48,7 +48,7 @@ export class TenantFiles {
   get(key) { return this.bucket.get(this.prefix + key); }
   delete(keys) { return this.bucket.delete(Array.isArray(keys) ? keys.map(k => this.prefix + k) : this.prefix + keys); }
   async list(opts = {}) {
-    const l = await this.bucket.list({ ...opts, prefix: this.prefix });
+    const l = await this.bucket.list({ ...opts, prefix: this.prefix + (opts.prefix || '') });
     return { ...l, objects: l.objects.map(o => ({ ...o, key: o.key.slice(this.prefix.length) })) };
   }
 }

@@ -56,6 +56,22 @@ class SqlObject extends DurableObject {
       return n;
     });
   }
+  /** Put a snapshot back: every table is emptied, then filled with the given rows, all in one transaction (foreign keys are checked at the end). */
+  replaceAll(tableNames, tables, views) {
+    this.ensure();
+    return this.ctx.storage.transactionSync(() => {
+      this.sql.exec('PRAGMA defer_foreign_keys = ON');
+      for (const v of views) this.sql.exec('DROP VIEW IF EXISTS "' + v + '"');
+      for (const n of tableNames) this.sql.exec('DELETE FROM "' + n + '"');
+      let rows = 0;
+      for (const t of tables) {
+        if (!t.rows.length) continue;
+        const q = 'INSERT INTO "' + t.name + '" (' + t.columns.map(c => '"' + c + '"').join(',') + ') VALUES (' + t.columns.map(() => '?').join(',') + ')';
+        for (const r of t.rows) { this.sql.exec(q, ...r); rows++; }
+      }
+      return rows;
+    });
+  }
   /** Remove everything (a failed import, or a company that left and asked for deletion). */
   wipe() { return this.ctx.storage.deleteAll(); }
 }

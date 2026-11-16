@@ -55,6 +55,22 @@ export async function tenantOfEmail(ctl, email) {
   const r = await first(ctl, 'SELECT tenant_id FROM identities WHERE email = ?', String(email || '').trim());
   return r ? r.tenant_id : null;
 }
+/** After a restore the people may be different: the sign-in register follows the company's own list of people. */
+export async function syncIdentities(env, tenantId, db) {
+  const ctl = await controlDB(env);
+  const mine = new Set((await all(db, 'SELECT email FROM persons')).map(p => p.email.toLowerCase()));
+  for (const r of await all(ctl, 'SELECT email FROM identities WHERE tenant_id = ?', tenantId)) if (!mine.has(r.email.toLowerCase())) await releaseEmail(ctl, tenantId, r.email);
+  for (const e of mine) await claimEmail(ctl, tenantId, e).catch(() => {});
+}
+/** The company leaves: its data, its files and its place in the sign-in register are removed. */
+export async function deleteTenant(env, tenantId) {
+  const ctl = await controlDB(env), files = tenantFiles(env, tenantId);
+  if (files) { let cur; do { const l = await files.list({ cursor: cur, limit: 500 }); if (l.objects.length) await files.delete(l.objects.map(o => o.key)); cur = l.truncated ? l.cursor : null; } while (cur); }
+  await tenantStub(env, tenantId).wipe();
+  await run(ctl, 'DELETE FROM identities WHERE tenant_id = ?', tenantId);
+  await run(ctl, 'DELETE FROM usage WHERE tenant_id = ?', tenantId);
+  await run(ctl, "UPDATE tenants SET status = 'deleted', name = '' WHERE id = ?", tenantId);
+}
 export const listTenants = async (env) => all(await controlDB(env), "SELECT id, name, legacy FROM tenants WHERE status != 'deleted'");
 
 // ---------------------------------------------------------------- the first workspace (the old single database) becomes a company

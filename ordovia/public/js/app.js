@@ -77,6 +77,7 @@
       <p class="small muted center">New here? <a href="#" id="newCo">Create your company</a> – free for 14 days.</p>
       ${exampleButton()}
       ${FB.langSwitchHtml()}
+      ${FB.legalLinks()}
       ${FB.state.settings.demo ? `<div class="demo-users"><p class="small muted">Demo colleagues (password <code>demo1234</code>):</p>
         ${[['anna', 'Anna – Manager, Sales'], ['bram', 'Bram – Employee, Sales'], ['carla', 'Carla – Employee, Operations'], ['daan', 'Daan – Manager, Operations'], ['eva', 'Eva – Finance']]
           .map(([k, l]) => `<button type="button" class="chip" data-email="${k}@example.com">${esc(l)}</button>`).join('')}</div>` : ''}
@@ -102,8 +103,9 @@
       <label>E-mail<input name="email" type="email" required autocomplete="username"></label>
       <label>Password <small class="muted">(at least 8 characters)</small><input name="password" type="password" minlength="8" required autocomplete="new-password"></label>
       <label class="check"><input type="checkbox" name="demo"><span>Add the example company (colleagues, forms, processes, dashboard) so I can explore – leave unticked for a clean start</span></label>
+      <p class="small muted" data-notranslate>${FB.i18n.lang === 'nl' ? 'Door een bedrijf aan te maken ga je akkoord met de <a href="/legal/terms.nl.html" target="_blank" rel="noopener">voorwaarden</a> en de <a href="/legal/privacy.nl.html" target="_blank" rel="noopener">privacyverklaring</a>.' : 'By creating a company you agree to the <a href="/legal/terms.en.html" target="_blank" rel="noopener">terms</a> and the <a href="/legal/privacy.en.html" target="_blank" rel="noopener">privacy statement</a>.'}</p>
       <button class="btn primary block">Create workspace</button>
-      <p class="small muted center">Already have an account? <a href="#" id="haveCo">Sign in</a></p>${exampleButton()}${FB.langSwitchHtml()}</form></div>`;
+      <p class="small muted center">Already have an account? <a href="#" id="haveCo">Sign in</a></p>${exampleButton()}${FB.langSwitchHtml()}${FB.legalLinks()}</form></div>`;
     wireExample(main); FB.wireLang(main);
     $('#haveCo', main).onclick = (e) => { e.preventDefault(); FB.state.setup = false; P.login(main); };
     const f = $('#setupForm');
@@ -551,8 +553,8 @@
         <label>Notification webhook <small class="muted">(https – new and overdue tasks are posted here)</small><input name="notify_webhook" class="mono" value="${esc(s.notify_webhook || '')}" placeholder="https://…"></label>
         <label>Message format<select name="notify_format"><option value="json" ${s.notify_format !== 'teams' ? 'selected' : ''}>Plain JSON (Slack, Power Automate, Zapier, your own system)</option><option value="teams" ${s.notify_format === 'teams' ? 'selected' : ''}>Microsoft Teams card (Workflows “When a Teams webhook request is received”)</option></select></label>
         <div class="form-actions left"><button class="btn primary">Save</button></div></form>
-      <div class="card narrow"><h3>Your data</h3><p class="muted">Everything of your company is stored in its own database in the EU. Download a full JSON export at any time.</p>
-        <a class="btn" href="/api/admin/export">Download export</a></div></div>`;
+      <div id="trustHost"></div></div>`;
+    FB.trustCards($('#trustHost', main));
     const f = $('#sf', main);
     let color = s.color || '';
     f.color.oninput = () => { color = f.color.value; document.documentElement.style.setProperty('--primary', color); };

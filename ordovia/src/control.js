@@ -17,6 +17,9 @@ export const CONTROL_MIGRATIONS = [
     ALTER TABLE tenants ADD COLUMN billing_until TEXT;
     CREATE TABLE stripe_events (id TEXT PRIMARY KEY, type TEXT NOT NULL, at TEXT NOT NULL, handled INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE usage (tenant_id TEXT NOT NULL, month TEXT NOT NULL, active_users INTEGER NOT NULL, runs INTEGER NOT NULL, storage_bytes INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (tenant_id, month));` },
+  { name: 'c0004_errors.sql', sql: `
+    CREATE TABLE errors (id INTEGER PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL, place TEXT, message TEXT, tenant_id TEXT);
+    CREATE INDEX errors_at ON errors(at);` },
 ];
 
 export const TENANT_ID = /^[a-f0-9]{12}$/;
