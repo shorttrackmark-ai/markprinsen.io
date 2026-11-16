@@ -47,5 +47,9 @@ export const MIGRATIONS = [
  {
   "name": "0012_timers.sql",
   "sql": "CREATE TABLE timers (\n  id INTEGER PRIMARY KEY,\n  instance_id INTEGER NOT NULL REFERENCES instances(id) ON DELETE CASCADE,\n  node_id TEXT NOT NULL,\n  name TEXT NOT NULL,\n  wake_at TEXT NOT NULL,\n  fired_at TEXT,\n  created_at TEXT NOT NULL\n);\nCREATE INDEX timers_due ON timers(fired_at, wake_at);\nCREATE INDEX timers_instance ON timers(instance_id);"
+ },
+ {
+  "name": "0013_doc_approval.sql",
+  "sql": "ALTER TABLE document_versions ADD COLUMN stage TEXT NOT NULL DEFAULT 'published';\nALTER TABLE document_versions ADD COLUMN approved_by INTEGER REFERENCES persons(id) ON DELETE SET NULL;\nALTER TABLE document_versions ADD COLUMN approved_at TEXT;"
  }
 ];

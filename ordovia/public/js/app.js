@@ -553,6 +553,7 @@
       <form class="card narrow" id="sf"><h3>Workspace</h3>
         <label>Company name<input name="company" value="${esc(s.company || '')}"></label>
         <label>Language of the company <small class="muted">(everyone starts with this; each person can choose their own)</small><select name="lang" data-notranslate><option value="nl" ${s.lang !== 'en' ? 'selected' : ''}>Nederlands</option><option value="en" ${s.lang === 'en' ? 'selected' : ''}>English</option></select></label>
+        <label class="check"><input type="checkbox" name="doc_approval" ${s.doc_approval === '1' ? 'checked' : ''}><span>Documents need approval before they are published (draft → approved → published)</span></label>
         <label>Brand colour<span class="color-row"><input type="color" name="color" value="${esc(s.color || '#4f46e5')}"><button type="button" class="btn small ghost" id="resetColor">Default</button></span></label>
         <label>Notification webhook <small class="muted">(https – new and overdue tasks are posted here)</small><input name="notify_webhook" class="mono" value="${esc(s.notify_webhook || '')}" placeholder="https://…"></label>
         <label>Message format<select name="notify_format"><option value="json" ${s.notify_format !== 'teams' ? 'selected' : ''}>Plain JSON (Slack, Power Automate, Zapier, your own system)</option><option value="teams" ${s.notify_format === 'teams' ? 'selected' : ''}>Microsoft Teams card (Workflows “When a Teams webhook request is received”)</option></select></label>
@@ -566,7 +567,7 @@
     f.onsubmit = async (e) => {
       e.preventDefault();
       try {
-        await api.put('/admin/settings', { company: f.company.value, lang: f.lang.value, color, notify_webhook: f.notify_webhook.value.trim(), notify_format: f.notify_format.value });
+        await api.put('/admin/settings', { company: f.company.value, lang: f.lang.value, doc_approval: f.doc_approval.checked, color, notify_webhook: f.notify_webhook.value.trim(), notify_format: f.notify_format.value });
         FB.state.settings.company = f.company.value; FB.state.settings.color = color; FB.applyBranding(); FB.shell('/admin/settings'); toast('Settings saved', 'ok');
       } catch (err) { toast(err.message, 'error'); }
     };

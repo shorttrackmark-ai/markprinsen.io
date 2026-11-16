@@ -30,7 +30,7 @@
     const draw = () => {
       const shown = list.filter(d => FB.org.match(d, st, [d.name, d.description, d.owner, d.file_name, d.folder, kindLabel(d.kind)].join(' ')) && (!st.kind || d.kind === st.kind) && (!st.folder || (st.folder === '-' ? !d.folder : d.folder === st.folder || (d.folder || '').startsWith(st.folder + ' / '))));
       FB.org.register($('#dcList', main), shown, [
-        { label: 'Document', cell: d => `${d.mime && /^image\//.test(d.mime) ? `<img class="link-thumb sm" src="/api/files/${d.file_id}" alt="">` : ''}<a href="#/documents/${d.id}"><b>${esc(d.name)}</b></a> ${FB.org.status(d.status)}`, sort: d => d.name.toLowerCase() },
+        { label: 'Document', cell: d => `${d.mime && /^image\//.test(d.mime) ? `<img class="link-thumb sm" src="/api/files/${d.file_id}" alt="">` : ''}<a href="#/documents/${d.id}"><b>${esc(d.name)}</b></a> ${FB.org.status(d.status)}${d.pending ? ' <span class="tag">waits for approval</span>' : ''}`, sort: d => d.name.toLowerCase() },
         { label: 'Kind', cell: d => esc(kindLabel(d.kind)), sort: d => kindLabel(d.kind) },
         { label: 'Folder', cell: d => (d.folder ? esc(d.folder) : '<span class="muted">–</span>'), sort: d => d.folder || '' },
         { label: 'Area', cell: FB.org.cell.areaChip, sort: d => FB.org.areaName(d.area_id) },
@@ -80,7 +80,7 @@
   // ---------------------------------------------------------------- one document
   FB.route('/documents/:id', async (main, { id }) => {
     const d = await api.get('/documents/' + Number(id));
-    const cur = d.versions[0], isImg = !!(cur && cur.file_id && /^image\//.test(cur.mime || ''));
+    const cur = d.versions.find(v => v.version === d.version) || d.versions[0], isImg = !!(cur && cur.file_id && /^image\//.test(cur.mime || ''));
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/documents">← Documents</a><h1>${esc(d.name)} ${FB.org.status(d.status)}</h1>
       <p class="muted">${d.folder ? 'Folder: ' + esc(d.folder) + ' · ' : ''}${esc(kindLabel(d.kind))} · version ${d.version}${d.area ? ` · <a href="#/area/${d.area_id}">${esc(d.area)}</a>` : ''} · owner ${esc(d.owner || '–')}</p>
       ${d.reviewDue ? `<p class="small ${d.overdue ? 'warn-text' : 'muted'}">${d.overdue ? '⚠ Review was due' : 'Next review'} ${esc(d.reviewDue)}${d.reviewed_at ? ` · last reviewed ${esc(fmtDate(d.reviewed_at).slice(0, 10))}` : ''}</p>` : ''}</div>
@@ -88,10 +88,13 @@
         ${d.canManage ? '<button class="btn" id="dvNew">Upload new version</button><button class="btn" id="dvReview">Mark as reviewed</button>' : ''}${FB.isAdmin() ? '<button class="btn ghost" id="dvEdit">Edit</button>' : ''}</div></div>
       ${d.description ? `<p>${esc(d.description)}</p>` : ''}
       ${isImg ? `<p><a href="/api/files/${cur.file_id}" target="_blank" rel="noopener"><img class="doc-preview" src="/api/files/${cur.file_id}" alt="${esc(d.name)}"></a></p>` : ''}
-      <div class="two-col"><div><h3>Versions</h3><div class="table-wrap"><table class="grid"><thead><tr><th>Version</th><th>File</th><th>Uploaded</th><th>By</th><th>Note</th></tr></thead><tbody>
-        ${d.versions.map(v => `<tr><td>v${v.version}</td><td>${v.file_id ? `<a href="/api/files/${v.file_id}" target="_blank" rel="noopener">${esc(v.file_name)}</a> <span class="muted small">${esc(fmtSize(v.size))}</span>` : '–'}</td><td>${esc(fmtDate(v.uploaded_at))}</td><td>${esc(v.who || '–')}</td><td class="muted small">${esc(v.note || '')}</td></tr>`).join('')}</tbody></table></div></div>
+      <div class="two-col"><div><h3>Versions</h3><div class="table-wrap"><table class="grid"><thead><tr><th>Version</th><th>File</th><th>Uploaded</th><th>By</th><th>Note</th>${d.approval || d.versions.some(v => v.stage !== 'published') ? '<th>Stage</th><th></th>' : ''}</tr></thead><tbody>
+        ${d.versions.map(v => `<tr><td>v${v.version}</td><td>${v.file_id ? `<a href="/api/files/${v.file_id}" target="_blank" rel="noopener">${esc(v.file_name)}</a> <span class="muted small">${esc(fmtSize(v.size))}</span>` : '–'}</td><td>${esc(fmtDate(v.uploaded_at))}</td><td>${esc(v.who || '–')}</td><td class="muted small">${esc(v.note || '')}</td>${d.approval || d.versions.some(x => x.stage !== 'published') ? `<td>${v.stage === 'draft' ? '<span class="status s-draft">draft</span>' : v.stage === 'approved' ? `<span class="status s-open">approved</span><div class="muted small">${esc(v.approved_by_name || '')} ${esc(fmtDate(v.approved_at))}</div>` : v.version === d.version ? '<span class="status s-done">published</span>' : '<span class="muted small">earlier</span>'}</td><td>${d.canManage && v.stage === 'draft' && d.canApprove ? `<button class="btn small" data-vapprove="${v.version}">Approve</button> ` : ''}${d.canManage && v.stage === 'approved' ? `<button class="btn small primary" data-vpublish="${v.version}">Publish</button> ` : ''}${d.canManage && v.stage !== 'published' ? `<button class="btn small ghost" data-vremove="${v.version}">Remove</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody></table></div>${d.approval ? '<p class="small muted">New versions are first a draft, then approved by an administrator, then published. Until then everybody keeps seeing the published version.</p>' : ''}</div>
       <div id="dvLinks"></div></div></div>`;
     FB.org.links($('#dvLinks', main), { type: 'document', id: d.id }, { title: 'Links', outLabel: 'Refers to', inLabel: 'Used in' });
+    const act = async (selector, path, method, msg) => $$(selector, main).forEach(b => b.onclick = async () => { try { await api[method](`/documents/${d.id}/versions/${b.dataset[path]}${method === 'post' ? '/' + msg[0] : ''}`, method === 'post' ? {} : undefined); toast(msg[1], 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); } });
+    act('[data-vapprove]', 'vapprove', 'post', ['approve', 'Approved']); act('[data-vpublish]', 'vpublish', 'post', ['publish', 'Published']);
+    $$('[data-vremove]', main).forEach(b => b.onclick = async () => { if (!confirm('Remove this unpublished version?')) return; try { await api.del(`/documents/${d.id}/versions/${b.dataset.vremove}`); toast('Removed', 'ok'); FB.render(); } catch (e) { toast(e.message, 'error'); } });
     const nv = $('#dvNew', main);
     if (nv) nv.onclick = () => {
       const m = modal('Upload new version', `<form id="nvf"><p class="muted small">The previous version stays in the history. Uploading counts as a review.</p><label>File<input type="file" name="file" required></label><label>What changed? <small class="muted">(optional)</small><input name="note"></label><div class="form-actions"><button class="btn primary">Upload</button></div></form>`);

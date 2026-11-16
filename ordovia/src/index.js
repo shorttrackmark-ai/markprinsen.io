@@ -1154,6 +1154,7 @@ route('PUT', '/api/admin/settings', async (c) => {
   const st = [];
   const set = (k, v) => st.push(c.db.prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, v));
   if (b.company != null) set('company', String(b.company).slice(0, 80));
+  if (b.doc_approval != null) set('doc_approval', b.doc_approval ? '1' : '0');
   if (b.lang != null) { if (!['nl', 'en'].includes(b.lang)) throw new HttpError(400, 'Language must be nl or en'); set('lang', b.lang); }
   if (b.color != null) { if (b.color && !/^#[0-9a-f]{6}$/i.test(b.color)) throw new HttpError(400, 'Colour must look like #4f46e5'); set('color', b.color); }
   if (c.demo && b.notify_webhook) throw new HttpError(403, 'Webhooks are switched off in the example.');
@@ -1249,6 +1250,8 @@ route('GET', '/api/admin/health', async (c) => {
     if (!d.owner_id) add('warn', 'ownership', 'Document “' + d.name + '” has no owner', '', link);
     if (!d.area_id) add('info', 'structure', 'Document “' + d.name + '” is in no area', '', link, { entity: 'document', id: d.id });
   }
+  for (const v of await all(c.db, "SELECT d.id, d.name, v.version, v.stage FROM document_versions v JOIN documents d ON d.id = v.document_id WHERE v.stage != 'published' AND d.status != 'archived' ORDER BY d.name"))
+    add('info', 'approval', 'Document “' + v.name + '” version ' + v.version + (v.stage === 'draft' ? ' waits for approval' : ' is approved but not published yet'), '', '#/documents/' + v.id);
   const usedForms = new Set();
   for (const f of flows) {
     const g = parse(f.graph, { nodes: [], edges: [] });
@@ -1572,7 +1575,7 @@ route('POST', '/api/files', async (c) => {
 
 async function canReadFile(c, f) {
   if (c.user.is_admin || f.uploaded_by === c.user.id) return true;
-  if (await first(c.db, "SELECT 1 FROM document_versions v JOIN documents d ON d.id = v.document_id WHERE v.file_id = ? AND d.status != 'archived'", f.id)) return true;
+  if (await first(c.db, "SELECT 1 FROM document_versions v JOIN documents d ON d.id = v.document_id WHERE v.file_id = ? AND d.status != 'archived' AND ((v.stage = 'published' AND d.status != 'draft') OR d.owner_id = ?)", f.id, c.user.id)) return true;
   if (f.form_id) { const form = (await c.forms()).find(x => x.id === f.form_id); if (form && canViewForm(c.user, await c.dir(), form)) return true; }
   if (f.instance_id) { const inst = await first(c.db, 'SELECT * FROM instances WHERE id = ?', f.instance_id); if (inst && await canSeeInstance(c, inst)) return true; }
   return false;
@@ -1598,7 +1601,7 @@ async function docsByIds(c, ids, sections) {
   if (!ids.length) return [];
   const rows = await all(c.db, `SELECT d.id, d.name, d.kind, d.folder, d.version, f.id AS file_id, f.name AS file_name, f.size, f.mime FROM documents d
     LEFT JOIN document_versions v ON v.document_id = d.id AND v.version = d.version LEFT JOIN files f ON f.id = v.file_id
-    WHERE d.status != 'archived' AND d.id IN (${ids.map(() => '?').join(',')}) ORDER BY d.name`, ...ids);
+    WHERE d.status NOT IN ('archived', 'draft') AND d.id IN (${ids.map(() => '?').join(',')}) ORDER BY d.name`, ...ids);
   return sections ? rows.map(d => ({ ...d, section: String(sections[d.id] || '') })) : rows;
 }
 /** "Quality / ISO 9001": at most two levels, short names, no slashes inside a name. */
@@ -1611,20 +1614,20 @@ async function takeFile(c, fileId, tx) {
 }
 route('GET', '/api/documents', async (c) => {
   const today = now().slice(0, 10);
-  const rows = await all(c.db, `SELECT d.*, p.name AS owner, f.id AS file_id, f.name AS file_name, f.size, f.mime FROM documents d LEFT JOIN persons p ON p.id = d.owner_id
+  const rows = await all(c.db, `SELECT d.*, p.name AS owner, f.id AS file_id, f.name AS file_name, f.size, f.mime, (SELECT COUNT(*) FROM document_versions v2 WHERE v2.document_id = d.id AND v2.stage != 'published') AS pending FROM documents d LEFT JOIN persons p ON p.id = d.owner_id
     LEFT JOIN document_versions v ON v.document_id = d.id AND v.version = d.version LEFT JOIN files f ON f.id = v.file_id
-    WHERE d.status != 'archived' OR ? = 1 ORDER BY d.name`, c.user.is_admin ? 1 : 0);
+    WHERE (d.status != 'archived' AND (d.status != 'draft' OR d.owner_id = ?2)) OR ?1 = 1 ORDER BY d.name`, c.user.is_admin ? 1 : 0, c.user.id);
   return rows.map(d => docRow(d, today));
 });
 route('GET', '/api/documents/:id', async (c, { id }) => {
   const d = await first(c.db, 'SELECT d.*, p.name AS owner, a.name AS area FROM documents d LEFT JOIN persons p ON p.id = d.owner_id LEFT JOIN areas a ON a.id = d.area_id WHERE d.id = ?', Number(id));
-  if (!d || (d.status === 'archived' && !c.user.is_admin)) throw new HttpError(404, 'Document not found');
-  const versions = await all(c.db, `SELECT v.version, v.note, v.uploaded_at, p.name AS who, f.id AS file_id, f.name AS file_name, f.size, f.mime FROM document_versions v LEFT JOIN persons p ON p.id = v.uploaded_by
-    LEFT JOIN files f ON f.id = v.file_id WHERE v.document_id = ? ORDER BY v.version DESC`, d.id);
+  const canManage = !!(c.user.is_admin || (d && d.owner_id && d.owner_id === c.user.id));
+  if (!d || (d.status === 'archived' && !c.user.is_admin) || (d.status === 'draft' && !canManage)) throw new HttpError(404, 'Document not found');
+  const versions = await all(c.db, `SELECT v.version, v.note, v.stage, v.approved_at, ap.name AS approved_by_name, v.uploaded_at, p.name AS who, f.id AS file_id, f.name AS file_name, f.size, f.mime FROM document_versions v LEFT JOIN persons p ON p.id = v.uploaded_by
+    LEFT JOIN persons ap ON ap.id = v.approved_by LEFT JOIN files f ON f.id = v.file_id WHERE v.document_id = ? AND (v.stage = 'published' OR ?) ORDER BY v.version DESC`, d.id, canManage ? 1 : 0);
   const usedIn = [];
   for (const fl of await all(c.db, "SELECT id, name, graph FROM flows WHERE status = 'active'")) for (const n of parse(fl.graph, { nodes: [] }).nodes) if ((n.docIds || []).map(Number).includes(d.id)) usedIn.push({ id: fl.id, flow: fl.name, step: n.name, section: String((n.docSections || {})[d.id] || '') });
-  const canManage = !!(c.user.is_admin || (d.owner_id && d.owner_id === c.user.id));
-  return { ...docRow(d, now().slice(0, 10)), versions, usedIn, canManage };
+  return { ...docRow(d, now().slice(0, 10)), versions, usedIn, canManage, canApprove: !!c.user.is_admin, approval: (await c.settings()).doc_approval === '1' };
 });
 async function saveDocument(c, id, b) {
   const old = id ? await first(c.db, 'SELECT * FROM documents WHERE id = ?', id) : null;
@@ -1636,14 +1639,15 @@ async function saveDocument(c, id, b) {
   const area = b.area_id === undefined ? (old ? old.area_id : null) : await areaOf(c, b.area_id);
   const owner = b.owner_id === undefined ? (old ? old.owner_id : c.user.id) : await personOf(c, b.owner_id);
   if (!(b.area_id === undefined ? (old && old.area_id) : b.area_id)) throw new HttpError(400, 'Choose an area first: every document belongs to a department.');
-  const status = cleanStatus(b.status, old ? old.status : 'active'), desc = String(b.description === undefined ? (old ? old.description : '') : b.description || '').slice(0, 1000);
+  const approval = (await c.settings()).doc_approval === '1';
+  const status = !old && approval ? 'draft' : cleanStatus(b.status, old ? old.status : 'active'), desc = String(b.description === undefined ? (old ? old.description : '') : b.description || '').slice(0, 1000);
   const folder = b.folder === undefined ? (old ? old.folder : null) : cleanFolder(b.folder);
   if (old) { await run(c.db, 'UPDATE documents SET name = ?, kind = ?, description = ?, area_id = ?, folder = ?, owner_id = ?, status = ?, review_months = ?, updated_at = ? WHERE id = ?', name, kind, desc, area, folder, owner, status, months, now(), old.id); return { id: old.id }; }
   const f = await takeFile(c, b.fileId);
   const did = await run(c.db, 'INSERT INTO documents(name, kind, description, area_id, folder, owner_id, status, version, review_months, reviewed_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,1,?,?,?,?)', name, kind, desc, area, folder, owner, status, months, now(), now(), now());
-  await c.db.batch([c.db.prepare('INSERT INTO document_versions(document_id, version, file_id, note, uploaded_by, uploaded_at) VALUES (?,?,?,?,?,?)').bind(did, 1, f.id, String(b.note || '').slice(0, 300), c.user.id, now()),
+  await c.db.batch([c.db.prepare('INSERT INTO document_versions(document_id, version, file_id, note, uploaded_by, uploaded_at, stage) VALUES (?,?,?,?,?,?,?)').bind(did, 1, f.id, String(b.note || '').slice(0, 300), c.user.id, now(), approval ? 'draft' : 'published'),
     c.db.prepare('UPDATE files SET attached_at = ? WHERE id = ?').bind(now(), f.id)]);
-  return { id: did };
+  return { id: did, needsApproval: approval };
 }
 route('POST', '/api/admin/documents', async (c) => saveDocument(c, null, await c.body()), { admin: true });
 route('PUT', '/api/admin/documents/:id', async (c, { id }) => saveDocument(c, Number(id), await c.body()), { admin: true });
@@ -1651,12 +1655,51 @@ route('POST', '/api/documents/:id/versions', async (c, { id }) => {
   const d = await first(c.db, 'SELECT * FROM documents WHERE id = ?', Number(id));
   if (!d) throw new HttpError(404, 'Document not found');
   if (!c.user.is_admin && d.owner_id !== c.user.id) throw new HttpError(403, 'Only the owner or an administrator can upload a new version');
-  const b = await c.body(), f = await takeFile(c, b.fileId), version = d.version + 1;
-  await c.db.batch([c.db.prepare('INSERT INTO document_versions(document_id, version, file_id, note, uploaded_by, uploaded_at) VALUES (?,?,?,?,?,?)').bind(d.id, version, f.id, String(b.note || '').slice(0, 300), c.user.id, now()),
+  const b = await c.body(), f = await takeFile(c, b.fileId), version = (await first(c.db, 'SELECT MAX(version) AS m FROM document_versions WHERE document_id = ?', d.id)).m + 1;
+  const approval = (await c.settings()).doc_approval === '1';   // with approval on, a new version waits: everybody keeps seeing the published one
+  await c.db.batch([c.db.prepare('INSERT INTO document_versions(document_id, version, file_id, note, uploaded_by, uploaded_at, stage) VALUES (?,?,?,?,?,?,?)').bind(d.id, version, f.id, String(b.note || '').slice(0, 300), c.user.id, now(), approval ? 'draft' : 'published'),
     c.db.prepare('UPDATE files SET attached_at = ? WHERE id = ?').bind(now(), f.id),
-    c.db.prepare('UPDATE documents SET version = ?, reviewed_at = ?, updated_at = ? WHERE id = ?').bind(version, now(), now(), d.id)]);
-  await logAudit(c, 'new version', 'document', d.id, d.name, 'v' + version + ' · ' + f.name);
-  return { version };
+    approval ? c.db.prepare('UPDATE documents SET updated_at = ? WHERE id = ?').bind(now(), d.id) : c.db.prepare('UPDATE documents SET version = ?, reviewed_at = ?, updated_at = ? WHERE id = ?').bind(version, now(), now(), d.id)]);
+  await logAudit(c, approval ? 'new draft' : 'new version', 'document', d.id, d.name, 'v' + version + ' · ' + f.name);
+  return { version, needsApproval: approval };
+});
+// draft -> approved (an administrator, not the person who uploaded it) -> published (owner or administrator)
+async function versionOf(c, id, v) {
+  const d = await first(c.db, 'SELECT * FROM documents WHERE id = ?', Number(id));
+  if (!d) throw new HttpError(404, 'Document not found');
+  const ver = await first(c.db, 'SELECT * FROM document_versions WHERE document_id = ? AND version = ?', d.id, Number(v));
+  if (!ver) throw new HttpError(404, 'Version not found');
+  return { d, ver };
+}
+route('POST', '/api/documents/:id/versions/:v/approve', async (c, { id, v }) => {
+  const { d, ver } = await versionOf(c, id, v);
+  if (!c.user.is_admin) throw new HttpError(403, 'Only an administrator can approve a document.');
+  if (ver.stage !== 'draft') throw new HttpError(409, 'This version is not waiting for approval.');
+  if (ver.uploaded_by === c.user.id && (await first(c.db, 'SELECT COUNT(*) AS n FROM persons WHERE is_admin = 1 AND active = 1')).n > 1) throw new HttpError(403, 'Somebody else has to approve what you uploaded: two pairs of eyes.');
+  await run(c.db, "UPDATE document_versions SET stage = 'approved', approved_by = ?, approved_at = ? WHERE id = ? AND stage = 'draft'", c.user.id, now(), ver.id);
+  await logAudit(c, 'approved', 'document', d.id, d.name, 'v' + ver.version);
+  return { ok: true };
+});
+route('POST', '/api/documents/:id/versions/:v/publish', async (c, { id, v }) => {
+  const { d, ver } = await versionOf(c, id, v);
+  if (!c.user.is_admin && d.owner_id !== c.user.id) throw new HttpError(403, 'Only the owner or an administrator can publish a document.');
+  if (ver.stage !== 'approved') throw new HttpError(409, 'Only an approved version can be published.');
+  await c.db.batch([
+    c.db.prepare("UPDATE document_versions SET stage = 'published' WHERE id = ?").bind(ver.id),
+    c.db.prepare("UPDATE documents SET version = ?, status = CASE WHEN status = 'draft' THEN 'active' ELSE status END, reviewed_at = ?, updated_at = ? WHERE id = ?").bind(ver.version, now(), now(), d.id),
+  ]);
+  await logAudit(c, 'published', 'document', d.id, d.name, 'v' + ver.version);
+  return { ok: true };
+});
+route('DELETE', '/api/documents/:id/versions/:v', async (c, { id, v }) => {
+  const { d, ver } = await versionOf(c, id, v);
+  if (!c.user.is_admin && d.owner_id !== c.user.id) throw new HttpError(403, 'Only the owner or an administrator can remove a version.');
+  if (ver.stage === 'published') throw new HttpError(409, 'A published version stays in the history.');
+  const f = await first(c.db, 'SELECT id, key FROM files WHERE id = ?', ver.file_id);
+  await c.db.batch([c.db.prepare('DELETE FROM document_versions WHERE id = ?').bind(ver.id), ...(f ? [c.db.prepare('DELETE FROM files WHERE id = ?').bind(f.id)] : [])]);
+  if (f && c.files) await c.files.delete(f.key);
+  await logAudit(c, 'removed', 'document', d.id, d.name, 'unpublished v' + ver.version);
+  return { ok: true };
 });
 route('POST', '/api/documents/:id/review', async (c, { id }) => {
   const d = await first(c.db, 'SELECT id, name, owner_id FROM documents WHERE id = ?', Number(id));
