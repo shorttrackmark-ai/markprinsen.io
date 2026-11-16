@@ -17,6 +17,8 @@ import {
   listTenants, legacyTenantId, importLegacy,
 } from './tenancy.js';
 import { isExampleAddress } from './control.js';
+import { billingOn, billingState, assertWritable, seatLimit, billingPage, startCheckout, startPortal, verifySignature, handleEvent, recordUsage } from './billing.js';
+import { TRIAL_DAYS, tierOf } from './plans.js';
 import { issueToken, openToken, useToken, mailLink, limitCheck, limitHit, limitClear, clientIp } from './accounts.js';
 export { TenantDO, ControlDO } from './tenant-do.js';
 
@@ -89,7 +91,7 @@ export default {
     try {
       // CSRF protection: state-changing calls must carry our custom header (forces a CORS preflight cross-site).
       const bearer = /^bearer\s+ord_/i.test(req.headers.get('authorization') || '');
-      if (req.method !== 'GET' && !bearer && req.headers.get('x-ordovia') !== '1') throw new HttpError(403, 'Missing request header');
+      if (req.method !== 'GET' && !bearer && req.headers.get('x-ordovia') !== '1' && url.pathname !== '/api/stripe/webhook') throw new HttpError(403, 'Missing request header');
       await c.init();
       await authenticate(c);
       for (const r of routes) {
@@ -97,6 +99,7 @@ export default {
         const m = r.re.exec(url.pathname);
         if (!m) continue;
         if (!r.opts.public && !c.user) throw new HttpError(401, 'Please sign in');
+        if (c.user && c.tenantId && req.method !== 'GET' && !r.opts.allowReadOnly) await assertWritable(c);
         if (!c.db && !r.opts.noCompany) throw new HttpError(r.opts.public ? 404 : 401, r.opts.public ? 'This form does not exist' : 'Please sign in');
         if (r.opts.admin) c.requireAdmin();
         const params = {}; r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
@@ -122,7 +125,7 @@ export default {
     try { await run(await controlDB(env), 'DELETE FROM attempts WHERE since < ?', new Date(Date.now() - 86400000).toISOString().slice(0, 19).replace('T', ' ')); } catch (e) { console.warn('attempts cleanup failed', e.message); }
     // every company gets its own turn; one company failing never stops the others
     for (const t of await listTenants(env).catch(() => [])) {
-      try { await hourly(tenantDB(env, t.id), tenantFiles(env, t.id), exec); } catch (e) { console.warn('hourly job failed for', t.id, e.message); }
+      try { const tdb = tenantDB(env, t.id); await hourly(tdb, tenantFiles(env, t.id), exec); await recordUsage(env, t.id, tdb); } catch (e) { console.warn('hourly job failed for', t.id, e.message); }
     }
     // the first workspace, as long as it has not been carried over into a company of its own
     if (env.DB && !(await legacyTenantId(env).catch(() => null))) await hourly(env.DB, env.FILES, exec);
@@ -185,7 +188,8 @@ route('GET', '/api/session', async (c) => {
   if (!c.db) return { setup: false, user: null, settings: { company: 'Ordovia', color: '', demo: false, demoSite: false, canTryExample: !!c.env.DB_DEMO } };
   const any = await first(c.db, 'SELECT id FROM persons LIMIT 1');
   const s = await c.settings();
-  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', demo: s.demo === '1', demoSite: c.demo, canTryExample: !c.demo && !!c.env.DB_DEMO } };
+  const bill = c.user && c.tenantId ? await billingState(c) : null;
+  return { setup: !any, user: c.user, settings: { company: s.company || 'Ordovia', color: s.color || '', demo: s.demo === '1', demoSite: c.demo, canTryExample: !c.demo && !!c.env.DB_DEMO, billing: bill && bill.on ? { access: bill.access, status: bill.status, banner: bill.banner, daysLeft: bill.daysLeft } : null } };
 }, { public: true, noCompany: true });
 
 // A new company: its own database, its first administrator, optionally the example people and processes.
@@ -204,6 +208,8 @@ route('POST', '/api/setup', async (c) => {
     await claimEmail(ctl, tid, email);
     await c.db.batch([
       c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('company', ?)").bind(String(b.company || 'My company').slice(0, 80)),
+      c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('billing_status', 'trial')"),
+      c.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('billing_trial_ends', ?)").bind(new Date(Date.now() + TRIAL_DAYS * 86400000).toISOString().slice(0, 19).replace('T', ' ')),
     ]);
     let adminId;
     if (b.demo) adminId = await seedDemo(c.db, { name, email, hash }, c.files);
@@ -255,7 +261,7 @@ route('POST', '/api/logout', async (c) => {
   if (token && c.db) await run(c.db, 'DELETE FROM sessions WHERE token_hash = ?', await sha256(token));
   c.cookies.push(sessionCookie('', 0, c.cookieName));
   return { ok: true };
-}, { public: true, noCompany: true });
+}, { public: true, noCompany: true, allowReadOnly: true });
 
 // ---------------------------------------------------------------- account links: invitation, password reset, new e-mail address
 route('GET', '/api/public/account/:token', async (c, { token }) => {
@@ -318,7 +324,7 @@ route('POST', '/api/me/password', async (c) => {
   ]);
   await logAudit(c, 'changed', 'account', c.user.id, c.user.name, 'own password changed');
   return { ok: true };
-});
+}, { allowReadOnly: true });
 route('POST', '/api/me/email', async (c) => {
   if (c.demo) throw new HttpError(403, 'Not in the example.');
   const b = await c.body(), email = String(b.email || '').trim();
@@ -330,13 +336,26 @@ route('POST', '/api/me/email', async (c) => {
   if ((!isExampleAddress(email) && await tenantOfEmail(ctl, email)) || await first(c.db, 'SELECT 1 FROM persons WHERE email = ?', email)) throw new HttpError(409, 'That address is already in use.');
   await run(c.db, "DELETE FROM account_tokens WHERE person_id = ? AND kind = 'email'", c.user.id);
   return mailLink(c, { to: email, name: c.user.name, kind: 'email', token: await issueToken(c, c.user.id, 'email', email) });
-});
+}, { allowReadOnly: true });
 
 // Local testing only: the mails that would have been sent.
 route('GET', '/api/dev/outbox', async (c) => {
   if (c.env.DATA_REGION !== 'local') throw new HttpError(404, 'Unknown endpoint');
   return all(await controlDB(c.env), 'SELECT at, to_addr, subject, body FROM outbox ORDER BY id DESC LIMIT 20');
 }, { public: true, noCompany: true });
+
+// ---------------------------------------------------------------- plan & billing (Stripe)
+route('GET', '/api/billing', async (c) => billingPage(c), { admin: true });
+route('POST', '/api/billing/checkout', async (c) => { if (!billingOn(c.env)) throw new HttpError(503, 'Billing is not switched on yet.'); return startCheckout(c, String((await c.body()).tier || '')); }, { admin: true, allowReadOnly: true });
+route('POST', '/api/billing/portal', async (c) => { if (!billingOn(c.env)) throw new HttpError(503, 'Billing is not switched on yet.'); return startPortal(c); }, { admin: true, allowReadOnly: true });
+// Stripe tells us what happened; the signature proves it was Stripe.
+route('POST', '/api/stripe/webhook', async (c) => {
+  if (!c.env.STRIPE_WEBHOOK_SECRET) throw new HttpError(503, 'Billing is not switched on yet.');
+  const raw = await c.req.text();
+  if (!(await verifySignature(raw, c.req.headers.get('stripe-signature'), c.env.STRIPE_WEBHOOK_SECRET))) throw new HttpError(400, 'Bad signature');
+  let ev; try { ev = JSON.parse(raw); } catch { throw new HttpError(400, 'Bad payload'); }
+  return handleEvent(c.env, ev);
+}, { public: true, noCompany: true, allowReadOnly: true });
 
 // ---------------------------------------------------------------- shared lookups
 route('GET', '/api/meta', async (c) => {
@@ -913,6 +932,10 @@ async function savePerson(c, pid, b) {
   const ctl = c.tenantId ? await controlDB(c.env) : null;
   if (ctl && email !== prevEmail) await claimEmail(ctl, c.tenantId, email);
   if (b.password && String(b.password).length < 8) throw new HttpError(400, 'Use a password of at least 8 characters');
+  if (!pid && b.active !== false) {   // a plan includes a number of people
+    const lim = await seatLimit(c);
+    if (lim != null && (await first(c.db, 'SELECT COUNT(*) AS n FROM persons WHERE active = 1')).n >= lim) throw new HttpError(402, `Your plan includes up to ${lim} people. Choose a larger plan under Plan & billing to add more.`);
+  }
   const invite = !pid && !b.password;   // no password given: the person is invited by e-mail and chooses their own
   if (pid === c.user.id && (!b.is_admin || !b.active)) throw new HttpError(400, 'You cannot remove your own admin rights or deactivate yourself');
   // attributes (function, employee number, ...): checked against the fields defined for the Person class, in the standard formats
@@ -1206,6 +1229,7 @@ route('GET', '/api/public/request/:token', async (c, { token }) => {
 }, { public: true });
 route('POST', '/api/public/request/:token', async (c, { token }) => {
   const { flow } = await publicFlow(c, token);
+  await assertWritable(c);
   const b = await c.body();
   if (b.website) return { ok: true, reference: 'ok' };   // (a hidden field only robots fill in)
   if (JSON.stringify(b).length > 60000) throw new HttpError(413, 'This request is too large');

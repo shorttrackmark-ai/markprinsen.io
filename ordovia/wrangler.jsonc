@@ -23,7 +23,8 @@
   ],
   // Hourly job: marks overdue tasks, fires reminder webhooks, and at 03:xx UTC resets the example
   "r2_buckets": [{ "binding": "FILES_EU", "bucket_name": "ordovia-files-eu", "jurisdiction": "eu" }, { "binding": "FILES", "bucket_name": "ordovia-files" }, { "binding": "FILES_DEMO", "bucket_name": "ordovia-demo-files" }],
-  "vars": { "DATA_REGION": "eu" },
+  // Stripe: STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are Worker secrets (wrangler secret put). STRIPE_PRICES maps a plan to its Stripe price id.
+  "vars": { "DATA_REGION": "eu", "STRIPE_PRICES": "{}" },
   "durable_objects": { "bindings": [{ "name": "TENANT", "class_name": "TenantDO" }, { "name": "CONTROL", "class_name": "ControlDO" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TenantDO", "ControlDO"] }],
   "triggers": { "crons": ["17 * * * *"] }

@@ -155,6 +155,7 @@
       if (seq !== renderSeq) return; // user navigated away meanwhile
       const bar = $('#loadingBar'); if (bar) bar.remove();
       holder.hidden = false;
+      if (FB.billingBar && FB.state.user) FB.billingBar(holder);
       window.scrollTo(0, 0);
       (FB.afterRender || []).splice(0).forEach(fn => fn());
     } catch (e) {

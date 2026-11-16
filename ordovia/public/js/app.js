@@ -31,6 +31,7 @@
       <div class="nav-title">Control</div><div class="nav-group">
       ${link('#/admin/health', '✚', 'Health', '/admin/health', healthBadge())}
       ${link('#/admin/settings', '⚙', 'Settings')}
+      ${FB.state.settings.billing ? link('#/admin/billing', '€', 'Plan &amp; billing', '/admin/billing') : ''}
       <details class="nav-more" ${inMore ? 'open' : ''}><summary>More</summary>
       ${link('#/admin/api', '⇌', 'API & web forms', '/admin/api')}
       ${link('#/admin/activity', '☷', 'Activity', '/admin/activity')}
