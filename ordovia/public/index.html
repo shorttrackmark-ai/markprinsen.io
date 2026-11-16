@@ -1,45 +1,90 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ordovia</title>
-  <meta name="description" content="Ordovia – processes, forms, handbook and dashboards on one SQL database. Everything linked, automated and checked.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%231e5b45'/%3E%3Ccircle cx='14' cy='16' r='7.5' fill='none' stroke='white' stroke-width='3'/%3E%3Crect x='19' y='13.5' width='11' height='5' fill='white'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="css/app.css?v=mwjrd6n9">
-</head>
-<body class="booting">
-  <header class="topbar">
-    <button id="menuBtn" class="icon-btn menu-btn" aria-label="Menu">☰</button>
-    <a href="#/" class="brand"><span class="logo-mark">◆</span> <span id="brandName">Ordovia</span></a>
-    <form id="searchForm" class="search" role="search"><input id="searchBox" type="search" placeholder="Search processes, forms, records…  ( / )" aria-label="Search" autocomplete="off"></form>
-    <div class="topbar-right"><span id="demoCtl" class="demo-ctl"></span><div id="who" class="who"></div><button id="logout" class="btn small ghost">Sign out</button></div>
-  </header>
-  <nav id="nav" class="sidebar" aria-label="Main"></nav>
-  <main id="main"><div class="loading">Loading…</div></main>
-  <div id="toasts" class="toasts" aria-live="polite"></div>
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ordovia – het procedurehandboek dat echt draait</title>
+<meta name="description" content="Teken je processen, laat formulieren de juiste informatie op de juiste plek ophalen en zie waar elke zaak staat. In een dag ingericht, zonder consultant, voor een vast bedrag per maand.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='%231e3a66' stroke-width='4'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/site.css">
+</head><body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="/"><span></span>Ordovia</a>
+  <nav class="site"><a href="#functies">Functies</a><a href="/prijzen">Prijzen</a><a href="/app/#/try">Voorbeeld</a><a href="/app/">Inloggen</a></nav>
+  <span class="lang"><a class="on" href="/">NL</a> · <a href="/en/">EN</a></span>
+  <a class="btn primary" href="/app/#/signup">Gratis starten</a>
+</div></header>
 
-  <script src="js/i18n.js?v=mwjrd6n9"></script>
-  <script src="js/nl.js?v=mwjrd6n9"></script>
-  <script src="js/expr.js?v=mwjrd6n9"></script>
-  <script src="js/logic.js?v=mwjrd6n9"></script>
-  <script src="js/ui.js?v=mwjrd6n9"></script>
-  <script src="js/cond.js?v=mwjrd6n9"></script>
-  <script src="js/account.js?v=mwjrd6n9"></script>
-  <script src="js/billing.js?v=mwjrd6n9"></script>
-  <script src="js/trust.js?v=mwjrd6n9"></script>
-  <script src="js/forms.js?v=mwjrd6n9"></script>
-  <script src="js/flows.js?v=mwjrd6n9"></script>
-  <script src="js/dashboards.js?v=mwjrd6n9"></script>
-  <script src="js/org.js?v=mwjrd6n9"></script>
-  <script src="js/links.js?v=mwjrd6n9"></script>
-  <script src="js/docs.js?v=mwjrd6n9"></script>
-  <script src="js/objects.js?v=mwjrd6n9"></script>
-  <script src="js/ai.js?v=mwjrd6n9"></script>
-  <script src="js/templates.js?v=mwjrd6n9"></script>
-  <script src="js/report.js?v=mwjrd6n9"></script>
-  <script src="js/insight.js?v=mwjrd6n9"></script>
-  <script src="js/me.js?v=mwjrd6n9"></script>
-  <script src="js/app.js?v=mwjrd6n9"></script>
-</body>
-</html>
+<div class="hero"><div class="wrap">
+  <h1>Het procedurehandboek dat echt draait.</h1>
+  <p class="lead">Teken je processen, laat formulieren de juiste informatie op de juiste plek ophalen en zie precies waar elke zaak staat. In een dag ingericht, zonder consultant, voor een vast bedrag per maand.</p>
+  <div class="cta"><a class="btn primary big" href="/app/#/signup">Gratis starten</a><a class="btn big" href="/app/#/try">Probeer het voorbeeld</a></div>
+  <div class="small"><span data-trial-days>14</span> dagen gratis · geen creditcard nodig · gegevens in de EU</div>
+  <img class="shot" src="/img/app-taken.png" width="1280" height="780" alt="Ordovia: een overzicht van de taken die op jou wachten, met de processen die je kunt starten">
+</div></div>
+
+<section id="functies"><div class="wrap">
+  <h2>Een handboek dat niet in een la verdwijnt</h2>
+  <p class="sub">Een procedure die op papier staat wordt zelden precies gevolgd. In Ordovia is de procedure ook de uitvoering: elke zaak loopt langs dezelfde stappen, en iedereen krijgt de informatie in het juiste formaat.</p>
+  <div class="grid3">
+    <div class="card"><h3>Procedures die uitgevoerd worden</h3><p>Teken de stappen, wijs ze toe aan de juiste mensen of afdelingen en laat beslissingen automatisch volgen uit wat is ingevuld.</p></div>
+    <div class="card"><h3>Het formulier is de stap</h3><p>Wie een stap doet, vult een formulier in. Dat is tegelijk de stap én de informatie: één keer invullen, gecontroleerd, voor iedereen beschikbaar. Geen mailtjes heen en weer.</p></div>
+    <div class="card"><h3>Alles gekoppeld</h3><p>Koppel normen met het juiste hoofdstuk, werkinstructies, foto's en machines aan de stap waar ze van belang zijn. Eén bron voor het hele bedrijf.</p></div>
+    <div class="card"><h3>Regels zonder programmeren</h3><p>“Boven € 1.000 ook goedkeuring van Financiën” klik je in elkaar. Berekeningen en controles zitten in het formulier.</p></div>
+    <div class="card"><h3>Past bij wat je al gebruikt</h3><p>Start en volg processen vanuit Microsoft 365: Power Automate, Teams en Outlook. Geen software om te installeren.</p></div>
+    <div class="card"><h3>Jouw gegevens, in de EU</h3><p>Elk bedrijf heeft een eigen, gescheiden database in de EU. Dagelijkse back-ups, en je kunt alles op elk moment downloaden.</p></div>
+  </div>
+</div></section>
+
+<section class="alt"><div class="wrap">
+  <h2>Zo ziet het eruit</h2>
+  <div class="showcase"><div class="txt"><h3>Iedereen ziet wat er voor hem of haar ligt</h3><p>Taken komen vanzelf bij de juiste persoon, met de werkinstructie erbij en een duidelijke deadline. Een vervanger neemt taken over als je afwezig bent.</p></div>
+    <img class="shot" src="/img/app-taken.png" width="1280" height="780" loading="lazy" alt="Overzicht van taken"></div>
+  <div class="showcase flip"><div class="txt"><h3>Het procedurehandboek is altijd actueel</h3><p>Elk proces met doel, eigenaar, stappen en werkinstructies, altijd gelijk aan wat echt draait. Met een beoordelingsdatum, zodat niets veroudert.</p></div>
+    <img class="shot" src="/img/app-proces.png" width="1280" height="780" loading="lazy" alt="Een proces in het handboek met het diagram van de stappen"></div>
+  <div class="showcase"><div class="txt"><h3>Zie waar werk blijft liggen</h3><p>Dashboards laten zien wat open staat, wat te laat is en hoe processen verlopen: over processen, nooit over personen.</p></div>
+    <img class="shot" src="/img/app-dashboard.png" width="1280" height="780" loading="lazy" alt="Dashboard met open taken, inkoopvolume en procesuitkomsten"></div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>In een dag ingericht</h2>
+  <p class="sub">Geen implementatietraject en geen cursus.</p>
+  <div class="steps">
+    <div class="card"><h3>Kies een sjabloon of beschrijf je proces</h3><p>Begin met een proces dat werkt: verlof, inkoop, incidenten, onboarding, kalibratie. Of beschrijf je eigen proces in gewone woorden; een AI die je al gebruikt schrijft het concept, Ordovia bouwt het.</p></div>
+    <div class="card"><h3>Pas het aan je bedrijf aan</h3><p>Sleep stappen, kies wie wat doet en welke gegevens nodig zijn. Een controle zegt het meteen als iets niet kan werken.</p></div>
+    <div class="card"><h3>Nodig je collega's uit</h3><p>Ze krijgen een link, kiezen een wachtwoord en zien meteen hun taken. Iedereen in je bedrijf mag meedoen.</p></div>
+  </div>
+</div></section>
+
+<section class="alt"><div class="wrap">
+  <div class="grid2">
+    <div><h2>Waarom Ordovia</h2>
+      <ul class="ticks">
+        <li><b>Vast bedrag per bedrijf</b> – naar het aantal mensen, niet per gebruiker.</li>
+        <li><b>Simpel</b> – Nederlands, geen cursus nodig, geavanceerde opties pas als je ze nodig hebt.</li>
+        <li><b>Eerlijk over gegevens</b> – Ordovia meet processen, nooit mensen, en je ziet precies wat er over jou is vastgelegd.</li>
+        <li><b>Je kunt altijd weg</b> – download alles (gegevens, CSV voor Excel en bestanden) en verwijder je bedrijf zelf.</li>
+      </ul></div>
+    <div><h2>Prijzen</h2>
+      <table class="plans"><tbody data-plans><tr><td colspan="3">…</td></tr></tbody></table>
+      <p class="sub" style="margin:10px 0 14px"><span data-trial-days>14</span> dagen gratis, zonder creditcard. Prijzen exclusief btw. Betalen kan met iDEAL of SEPA-incasso.</p>
+      <a class="btn" href="/prijzen">Alle details</a></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Veelgestelde vragen</h2>
+  <details><summary>Moet ik iets installeren?</summary><p>Nee. Ordovia draait in je browser, ook op een telefoon.</p></details>
+  <details><summary>Kan ik eerst kijken zonder me aan te melden?</summary><p>Ja: “Probeer het voorbeeld” opent een klein bedrijf met werkende processen. Je kunt er alles in doen; het wordt elke nacht hersteld.</p></details>
+  <details><summary>Wat gebeurt er na de proefperiode?</summary><p>Zonder abonnement wordt je werkruimte alleen-lezen: je kunt alles nog bekijken en downloaden, maar niets wijzigen. Kies je een abonnement, dan gaat alles direct verder waar het was.</p></details>
+  <details><summary>Waar staan mijn gegevens?</summary><p>In de Europese Unie, in een eigen database per bedrijf. Lees meer in de <a href="/legal/privacy.nl.html">privacyverklaring</a> en de <a href="/legal/dpa.nl.html">verwerkersovereenkomst</a>.</p></details>
+  <details><summary>Werkt het met Microsoft 365?</summary><p>Ja. Processen kunnen starten en vervolgd worden vanuit Power Automate, en meldingen kunnen naar Teams. Je hoeft niets te installeren.</p></details>
+</div></section>
+
+<div class="cta-band"><h2>Probeer het zelf</h2><p style="margin:0 0 20px;opacity:.9"><span data-trial-days>14</span> dagen gratis, zonder creditcard.</p>
+  <a class="btn primary big" href="/app/#/signup">Gratis starten</a> <a class="btn big" href="/app/#/try">Probeer het voorbeeld</a></div>
+
+<footer class="site"><div class="wrap">
+  <a href="/legal/terms.nl.html">Voorwaarden</a><a href="/legal/privacy.nl.html">Privacy</a><a href="/legal/dpa.nl.html">Verwerkersovereenkomst</a><a href="/status.html">Status</a>
+  <div style="margin-top:8px">© Ordovia · <a href="/en/">English</a></div>
+</div></footer>
+<script src="/site.js"></script>
+</body></html>

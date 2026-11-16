@@ -18,7 +18,7 @@ import {
 } from './tenancy.js';
 import { isExampleAddress } from './control.js';
 import { billingOn, billingState, assertWritable, seatLimit, billingPage, startCheckout, startPortal, verifySignature, handleEvent, recordUsage } from './billing.js';
-import { TRIAL_DAYS, tierOf } from './plans.js';
+import { TRIAL_DAYS, TIERS, tierOf } from './plans.js';
 import { localize, trText } from './localize.js';
 import { snapshot, restoreSnapshot, exportZip } from './backup.js';
 import { stripe } from './billing.js';
@@ -439,6 +439,9 @@ route('POST', '/api/admin/delete-company', async (c) => {
   return { ok: true };
 }, { admin: true, allowReadOnly: true });
 
+// The plans, for the website. A price that is still a placeholder is not shown.
+route('GET', '/api/plans', async () => ({ trialDays: TRIAL_DAYS, tiers: TIERS.map(t => ({ id: t.id, name: t.name, maxPeople: t.maxPeople, contact: !!t.contact, priceEur: t.placeholder || t.contact ? null : t.priceEur })) }), { public: true, noCompany: true, allowReadOnly: true });
+
 // Is everything working? Public; shows no data of anybody.
 route('GET', '/api/status', async (c) => {
   const comps = [], ctl = await controlDB(c.env).catch(() => null);
@@ -583,13 +586,13 @@ async function runtimeIO(c, tx, proc) {
     createTask: (t) => {
       tx.add('INSERT INTO tasks(instance_id, node_id, name, form_id, assignee, status, due_at, created_at) VALUES (?,?,?,?,?,?,?,?)',
         proc.id, t.nodeId, t.name, t.formId, JSON.stringify(t.assignee), 'open', t.dueAt, now());
-      if (hook) tx.after.push({ url: hook, payload: notifyBody(hookFormat, { event: 'task.created', text: `New task: ${t.name} – ${proc.title} (for ${D.describe(t.assignee)})`, link: origin + '/#/', task: t.name, process: proc.title }) });
+      if (hook) tx.after.push({ url: hook, payload: notifyBody(hookFormat, { event: 'task.created', text: `New task: ${t.name} – ${proc.title} (for ${D.describe(t.assignee)})`, link: origin + '/app/#/', task: t.name, process: proc.title }) });
     },
     createRecord: (form, data) => tx.add('INSERT INTO submissions(form_id, person_id, instance_id, data, created_at) VALUES (?,?,?,?,?)', form.id, null, proc.id, JSON.stringify(data), now()),
     updateRecord: (form, rid, patch) => tx.add('UPDATE submissions SET data = json_patch(data, ?), updated_at = ? WHERE id = ? AND form_id = ?', JSON.stringify(patch), now(), rid, form.id),
     webhook: (url, payload, format) => {
       if (!/^https:\/\//.test(url || '')) return;
-      const p = payload && payload.case ? { ...payload, link: origin + '/#/processes/' + payload.case.id } : payload;   // a case notification links back to the case
+      const p = payload && payload.case ? { ...payload, link: origin + '/app/#/processes/' + payload.case.id } : payload;   // a case notification links back to the case
       tx.after.push({ url, payload: format === 'teams' ? notifyBody('teams', p) : p });
     },
   };
@@ -602,7 +605,7 @@ async function finishProc(c, tx, proc) {
   if (tx.after.length && !c.demo) c.exec.waitUntil(Promise.all(tx.after.map(h => postJSON(h.url, h.payload))));
 }
 const publicVars = (vars) => { const o = { ...vars }; delete o.initiator; delete o.process; return o; };
-const runInfo = (proc, origin) => ({ id: proc.id, process: proc.flowName, status: proc.status, outcome: (proc.vars || {}).outcome ?? null, reference: proc.ref ?? null, url: origin + '/#/processes/' + proc.id });
+const runInfo = (proc, origin) => ({ id: proc.id, process: proc.flowName, status: proc.status, outcome: (proc.vars || {}).outcome ?? null, reference: proc.ref ?? null, url: origin + '/app/#/processes/' + proc.id });
 
 /** Validate a form submission on the server: types, lookups, calculations, rules. */
 async function finalizeForm(c, form, input, context, ownFiles) {
@@ -1389,7 +1392,7 @@ async function runView(c, iid) {
   const D = await c.dir(), vars = parse(raw.vars, {});
   const [info, tasks] = await Promise.all([first(c.db, 'SELECT * FROM v_instances WHERE id = ?', raw.id), all(c.db, 'SELECT name, status, assignee, due_at, completed_at FROM tasks WHERE instance_id = ? ORDER BY id', raw.id)]);
   return { id: raw.id, process: info.flow, title: raw.title, subject: raw.subject_id ? { form_id: raw.subject_form_id, id: raw.subject_id, label: (vars.subject || {}).label || null } : null, status: raw.status, outcome: vars.outcome ?? null, reference: raw.external_ref, source: raw.source, created_at: raw.created_at, finished_at: raw.finished_at,
-    outputs: publicVars(vars), tasks: tasks.map(t => ({ name: t.name, status: t.status, assignee: D.describe(parse(t.assignee, {})), due_at: t.due_at, completed_at: t.completed_at })), url: c.url.origin + '/#/processes/' + raw.id };
+    outputs: publicVars(vars), tasks: tasks.map(t => ({ name: t.name, status: t.status, assignee: D.describe(parse(t.assignee, {})), due_at: t.due_at, completed_at: t.completed_at })), url: c.url.origin + '/app/#/processes/' + raw.id };
 }
 route('GET', '/api/v1/runs/:id', async (c, { id }) => ({ run: await runView(c, id) }));
 route('GET', '/api/v1/runs', async (c) => {

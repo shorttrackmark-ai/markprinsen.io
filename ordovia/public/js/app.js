@@ -57,6 +57,9 @@
   const exampleButton = () => (FB.state.settings.canTryExample ? '<button type="button" class="btn block example-btn" data-example>▶ Try the example – no login needed</button>' : '');
   const wireExample = (root) => { const b = $('[data-example]', root); if (b) b.onclick = async () => { b.disabled = true; b.textContent = 'Preparing the example…'; try { await api.post('/demo/enter', { as: 'admin' }); location.hash = '#/'; location.reload(); } catch (err) { toast(err.message, 'error'); b.disabled = false; b.textContent = '▶ Try the example – no login needed'; } }; };
   P.login = function (main) {
+    // entrances from the website: #/signup opens the sign-up form, #/try opens the example at once
+    if (location.hash === '#/try') { main.innerHTML = '<div class="login-wrap"><div class="card login"><p class="muted">Preparing the example…</p></div></div>'; enterDemo('admin'); return; }
+    if (location.hash === '#/signup' && !FB.state.settings.demoSite) return P.setup(main);
     if (FB.state.settings.demoSite) {
       main.innerHTML = `<div class="login-wrap"><div class="card login"><div class="brand big"><span class="logo-mark">◆</span> Ordovia – example</div>
         <p class="muted">A small company with people, forms, three processes and a dashboard. Click around, start a process, approve a task – the example resets every night and sends nothing anywhere.</p>

@@ -3,7 +3,7 @@
 export const TRIAL_DAYS = 14;
 export const GRACE_DAYS = 7;   // a failed payment keeps working this long while Stripe retries
 export const TIERS = [
-  { id: 'small', name: 'Small', maxPeople: 10, priceEur: 49, placeholder: true },
+  { id: 'small', name: 'Start', maxPeople: 10, priceEur: 49, placeholder: true },
   { id: 'team', name: 'Team', maxPeople: 50, priceEur: 149, placeholder: true },
   { id: 'business', name: 'Business', maxPeople: 250, priceEur: 349, placeholder: true },
   { id: 'enterprise', name: 'Enterprise', maxPeople: null, priceEur: null, placeholder: true, contact: true },

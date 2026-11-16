@@ -41,7 +41,7 @@ const WORDS = {
 };
 
 /** Where the app lives, for links in mails. */
-export const appLink = (c, path) => `${c.url.origin}/#/${path}`;
+export const appLink = (c, path) => `${c.url.origin}/app/#/${path}`;
 
 /** Mail a link. If no mail provider is set up yet, hand the link back so the screen can show it. */
 export async function mailLink(c, { to, name, kind, token, lang }) {

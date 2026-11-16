@@ -161,14 +161,14 @@ export async function startCheckout(c, tierId) {
     automatic_tax: { enabled: true }, tax_id_collection: { enabled: true }, billing_address_collection: 'required',
     customer_update: row && row.stripe_customer ? { address: 'auto', name: 'auto' } : undefined,
     allow_promotion_codes: true,
-    success_url: origin + '/#/admin/billing?done=1', cancel_url: origin + '/#/admin/billing',
+    success_url: origin + '/app/#/admin/billing?done=1', cancel_url: origin + '/app/#/admin/billing',
   });
   return { url: sess.url };
 }
 export async function startPortal(c) {
   const row = await first(await controlDB(c.env), 'SELECT stripe_customer FROM tenants WHERE id = ?', c.tenantId);
   if (!row || !row.stripe_customer) throw new HttpError(400, 'There is no subscription to manage yet.');
-  const p = await stripe(c.env, 'POST', '/billing_portal/sessions', { customer: row.stripe_customer, return_url: c.url.origin + '/#/admin/billing' });
+  const p = await stripe(c.env, 'POST', '/billing_portal/sessions', { customer: row.stripe_customer, return_url: c.url.origin + '/app/#/admin/billing' });
   return { url: p.url };
 }
 void all;
