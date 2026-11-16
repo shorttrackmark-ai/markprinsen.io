@@ -11,6 +11,7 @@
     action: { label: 'Calculate', w: 160, h: 56 },
     record: { label: 'Create / update record', w: 170, h: 60 },
     webhook: { label: 'Webhook', w: 150, h: 56 },
+    wait: { label: 'Wait', w: 140, h: 56 },
     end: { label: 'End', w: 120, h: 46 },
   };
   const Flows = { NODE_TYPES };
@@ -28,6 +29,7 @@
     if (n.type === 'start' || n.type === 'end') return `<rect x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="${h / 2}" class="shape"/>`;
     if (n.type === 'decision') return `<polygon points="0,${-h / 2} ${w / 2},0 0,${h / 2} ${-w / 2},0" class="shape"/>`;
     if (n.type === 'record') return `<path d="M${-w / 2},${-h / 2 + 8} a${w / 2},8 0 0,1 ${w},0 v${h - 16} a${w / 2},8 0 0,1 ${-w},0 z M${-w / 2},${-h / 2 + 8} a${w / 2},8 0 0,0 ${w},0" class="shape"/>`;
+    if (n.type === 'wait') return `<rect x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="${h / 2}" class="shape" stroke-dasharray="6 3"/>`;
     if (n.type === 'webhook') return `<polygon points="${-w / 2 + 14},${-h / 2} ${w / 2},${-h / 2} ${w / 2 - 14},${h / 2} ${-w / 2},${h / 2}" class="shape"/>`;
     return `<rect x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="10" class="shape"/>`;
   }
@@ -41,6 +43,7 @@
     const form = n.formId ? FB.state.meta.forms.find(f => f.id === Number(n.formId)) : null;
     if (n.type === 'task') return form ? form.name : 'no form!';
     if (n.type === 'record') return form ? (n.mode === 'update' ? 'update ' : 'new ') + form.name : 'no form!';
+    if (n.type === 'wait') return (n.waitAmount || '?') + ' ' + (n.waitUnit === 'hours' ? 'hours' : 'days');
     if (n.type === 'webhook') { try { return new URL(n.url).host; } catch (e) { return 'no url!'; } }
     return '';
   }
@@ -105,10 +108,11 @@
     $('#flHist').onclick = history;
     $$('[data-add]', main).forEach(b => b.onclick = () => {
       const t = b.dataset.add, r = svg.getBoundingClientRect(), id = uid('n');
-      const names = { task: 'New task', decision: 'Condition?', action: 'Calculate', record: 'Save record', webhook: 'Notify system', end: 'End' };
+      const names = { task: 'New task', decision: 'Condition?', action: 'Calculate', record: 'Save record', webhook: 'Notify system', wait: 'Wait', end: 'End' };
       const node = { id, type: t, name: names[t], x: Math.round((r.width / 2 - view.x) / view.k), y: Math.round((r.height / 2 - view.y) / view.k) };
       if (t === 'task') node.assignee = { type: 'initiator' };
       if (t === 'record') node.mode = 'create';
+      if (t === 'wait') { node.waitAmount = 1; node.waitUnit = 'days'; }
       g.nodes.push(node); sel = { kind: 'node', id }; touch(); draw(); drawProps();
     });
 
@@ -330,6 +334,7 @@
           ${target ? `<p class="hint">Fields of ${esc(target.name)}: ${target.fields.filter(f => f.type !== 'heading').map(f => `<code>${esc(f.key)}</code>`).join(' ')}</p>` : ''}` : ''}
         ${n.type === 'webhook' ? `<label>URL <small class="muted">(https://…)</small><input data-n="url" class="mono" value="${esc(n.url || '')}" placeholder="https://hooks.example.com/…"></label>
           <label>Data to send <small class="muted">(name = formula, empty = all variables)</small><textarea data-n="mapping" rows="4" class="mono" placeholder='text = "New order: " & item'>${esc(n.mapping || '')}</textarea></label>` : ''}
+        ${n.type === 'wait' ? `<label>Wait for<span class="row2"><input type="number" min="1" data-n="waitAmount" value="${esc(n.waitAmount || 1)}"><select data-n="waitUnit"><option value="days" ${n.waitUnit !== 'hours' ? 'selected' : ''}>days</option><option value="hours" ${n.waitUnit === 'hours' ? 'selected' : ''}>hours</option></select></span></label><p class="hint">The case continues by itself when the time is over. Waiting times are checked every hour.</p>` : ''}
         ${n.type === 'decision' ? '<p class="hint">Select the arrows leaving this decision to set their conditions.</p>' : ''}
         ${n.type === 'end' ? `<p class="hint">The name of this End becomes the <code>outcome</code> of the process.</p>
           <label class="check"><input type="checkbox" id="enNotify" ${n.notifyUrl !== undefined ? 'checked' : ''}><span>Send a notification when a case ends here</span></label>
@@ -342,7 +347,7 @@
         <div class="err" id="nErr"></div>${varsHint()}`;
       $$('[data-n]', box).forEach(inp => inp.addEventListener(inp.tagName === 'SELECT' ? 'change' : 'input', () => {
         const p = inp.dataset.n;
-        n[p] = p === 'formId' ? (inp.value ? Number(inp.value) : null) : p === 'dueHours' ? (inp.value ? Number(inp.value) : null) : inp.value;
+        n[p] = p === 'formId' ? (inp.value ? Number(inp.value) : null) : p === 'dueHours' ? (inp.value ? Number(inp.value) : null) : p === 'waitAmount' ? Number(inp.value) : inp.value;
         if (['assignments', 'mapping'].includes(p)) $('#nErr').textContent = FB.logic.assignments(inp.value).map(x => FB.expr.check(x.expr) && `${x.name}: ${FB.expr.check(x.expr)}`).filter(Boolean).join(' · ');
         touch(); draw();
         if (p === 'mode' || (p === 'formId' && n.type === 'record')) drawProps();

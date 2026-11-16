@@ -253,13 +253,14 @@
     const d = await api.get('/instances/' + Number(id));
     const inst = d.instance;
     const done = new Set(d.tasks.filter(t => t.status === 'done').map(t => t.node_id));
-    const open = new Set(d.tasks.filter(t => t.status === 'open').map(t => t.node_id));
+    const waiting = (d.timers || []).filter(t => !t.fired_at);
+    const open = new Set(d.tasks.filter(t => t.status === 'open').map(t => t.node_id).concat(waiting.map(t => t.node_id)));
     main.innerHTML = `<div class="page"><div class="page-head"><div><a class="crumb" href="#/processes">← Cases</a><h1>${esc(inst.title)}</h1>
       <p class="muted">${esc(inst.flow)}${d.subject ? ` · about <a href="#/objects/${d.subject.formId}/${d.subject.id}">${esc(d.subject.form)}: ${esc(d.subject.label)}</a>` : ''} · started by ${esc(inst.started_by || '?')} · ${esc(fmtDate(inst.created_at))}</p></div>
       <div class="actions"><span class="status s-${esc(inst.status)}">${esc(inst.status)}${inst.outcome ? ' · ' + esc(inst.outcome) : ''}</span>
       <a class="btn small" href="#/processes/${inst.id}/report">Report</a>${FB.isAdmin() ? '<button class="btn danger ghost small" id="pDel">Delete</button>' : ''}</div></div>
       <div class="card mini-flow">${FB.flows.static(d.graph, done, open)}</div>
-      <div class="two-col"><div><h3>Tasks</h3>${d.tasks.map(t => `<a class="card task-row" href="#/task/${t.id}"><div><b>${esc(t.name)}</b><div class="muted small">${t.status === 'done' ? `Done by ${esc(t.who)} · ${esc(fmtDate(t.completed_at))}` : esc(t.assignee)}</div></div><span class="status s-${esc(t.status)}">${esc(t.status)}</span></a>`).join('') || '<p class="muted">No tasks.</p>'}
+      <div class="two-col"><div><h3>Tasks</h3>${waiting.map(w => `<div class="card task-row"><div><b>${esc(w.name)}</b><div class="muted small">Waiting until ${esc(fmtDate(w.wake_at))}</div></div><span class="status s-open">waiting</span></div>`).join('')}${d.tasks.map(t => `<a class="card task-row" href="#/task/${t.id}"><div><b>${esc(t.name)}</b><div class="muted small">${t.status === 'done' ? `Done by ${esc(t.who)} · ${esc(fmtDate(t.completed_at))}` : esc(t.assignee)}</div></div><span class="status s-${esc(t.status)}">${esc(t.status)}</span></a>`).join('') || '<p class="muted">No tasks.</p>'}
         <details><summary>Process variables</summary><pre class="code small">${esc(JSON.stringify(d.vars, null, 2))}</pre></details></div>
       <div><h3>Timeline</h3><ol class="timeline">${d.events.map(e => `<li><span class="muted small">${esc(fmtDate(e.created_at))}</span>${esc(e.message)}</li>`).join('')}</ol></div></div></div>`;
     const del = $('#pDel', main);

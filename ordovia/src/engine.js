@@ -25,6 +25,13 @@ export function advance(proc, fromNodeId, io) {
         io.log(`Task “${node.name}” assigned to ${io.describe(node.assignee || { type: 'initiator' })}`);
         break; // wait for a person
       }
+      if (node.type === 'wait' && io.createTimer) {
+        const amount = Math.max(1, Number(node.waitAmount) || 1), unit = node.waitUnit === 'hours' ? 'hours' : 'days';
+        const wakeAt = new Date(Date.parse(io.now().replace(' ', 'T') + 'Z') + amount * (unit === 'hours' ? 1 : 24) * 3600000).toISOString().slice(0, 19).replace('T', ' ');
+        io.createTimer({ nodeId: node.id, name: node.name, wakeAt });
+        io.log(`Waiting ${amount} ${unit} at “${node.name}” (until ${wakeAt.slice(0, 16)})`);
+        break; // the hourly job continues the case when the time is over
+      }
       if (node.type === 'action') {
         for (const a of FB.logic.assignments(node.assignments)) {
           try { proc.vars[a.name] = FB.expr.evaluate(a.expr, proc.vars); } catch (e) { io.log(`Calculation error in “${node.name}”: ${e.message}`); }

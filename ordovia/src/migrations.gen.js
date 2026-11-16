@@ -43,5 +43,9 @@ export const MIGRATIONS = [
  {
   "name": "0011_language.sql",
   "sql": "ALTER TABLE persons ADD COLUMN lang TEXT;"
+ },
+ {
+  "name": "0012_timers.sql",
+  "sql": "CREATE TABLE timers (\n  id INTEGER PRIMARY KEY,\n  instance_id INTEGER NOT NULL REFERENCES instances(id) ON DELETE CASCADE,\n  node_id TEXT NOT NULL,\n  name TEXT NOT NULL,\n  wake_at TEXT NOT NULL,\n  fired_at TEXT,\n  created_at TEXT NOT NULL\n);\nCREATE INDEX timers_due ON timers(fired_at, wake_at);\nCREATE INDEX timers_instance ON timers(instance_id);"
  }
 ];

@@ -185,6 +185,7 @@
         if (n.type === 'task' && known && n.formId && !known.has(Number(n.formId))) errs.push(`Task “${n.name}” uses a form that no longer exists or is archived.`);
         if (n.type === 'record' && !n.formId) errs.push(`Record step “${n.name}” has no form.`);
         if (n.type === 'record' && n.mode === 'update' && !n.recordId) errs.push(`Record step “${n.name}” needs the id of the record to update.`);
+        if (n.type === 'wait' && !(Number(n.waitAmount) > 0)) errs.push(`Wait step “${n.name}” needs a waiting time.`);
         if (n.type === 'webhook' && !/^https:\/\//.test(n.url || '')) errs.push(`Webhook “${n.name}” needs an https:// address.`);
         if (out.length > 1 && !out.some(e => !e.condition)) errs.push(`“${n.name}” needs one arrow without a rule (the “otherwise” path): if no rule is true the case would get stuck.`);
         if (out.filter(e => !e.condition).length > 1) errs.push(`“${n.name}” has ${out.filter(e => !e.condition).length} arrows without a rule, but only one can be the “otherwise” path. Give the others a rule.`);

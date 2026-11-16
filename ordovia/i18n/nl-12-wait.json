@@ -1,0 +1,13 @@
+{
+"Wait": "Wachten",
+"+ Wait": "+ Wachten",
+"Wait for": "Wacht",
+"hours": "uren",
+"The case continues by itself when the time is over. Waiting times are checked every hour.": "De zaak gaat vanzelf verder als de tijd om is. Wachttijden worden elk uur gecontroleerd.",
+"Wait step “{}” needs a waiting time.": "Wachtstap “{}” heeft een wachttijd nodig.",
+"Waiting until {}": "Wacht tot {}",
+"waiting": "wacht",
+"Waiting {} {} at “{}” (until {})": "Wacht {} {} bij “{}” (tot {})",
+"Waiting time over at “{}”": "Wachttijd voorbij bij “{}”",
+": wait for some days or hours, then continue by itself.": ": wacht een aantal dagen of uren en ga dan vanzelf verder."
+}

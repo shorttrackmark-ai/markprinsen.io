@@ -134,6 +134,7 @@ export default {
       try {
         const tdb = tenantDB(env, t.id), tf = tenantFiles(env, t.id);
         await hourly(tdb, tf, exec); await recordUsage(env, t.id, tdb);
+        await fireTimers(cronCtx(env, exec, t.id));
         if (new Date(event.scheduledTime).getUTCHours() === 3 && tf) await backupTenant(tdb, tf);   // (every night)
       } catch (e) { console.warn('hourly job failed for', t.id, e.message); await recordError(env, 'cron', 'hourly', e.message, t.id); }
     }
@@ -588,6 +589,7 @@ async function runtimeIO(c, tx, proc) {
         proc.id, t.nodeId, t.name, t.formId, JSON.stringify(t.assignee), 'open', t.dueAt, now());
       if (hook) tx.after.push({ url: hook, payload: notifyBody(hookFormat, { event: 'task.created', text: `New task: ${t.name} – ${proc.title} (for ${D.describe(t.assignee)})`, link: origin + '/app/#/', task: t.name, process: proc.title }) });
     },
+    createTimer: (t) => tx.add('INSERT INTO timers(instance_id, node_id, name, wake_at, created_at) VALUES (?,?,?,?,?)', proc.id, t.nodeId, t.name, t.wakeAt, now()),
     createRecord: (form, data) => tx.add('INSERT INTO submissions(form_id, person_id, instance_id, data, created_at) VALUES (?,?,?,?,?)', form.id, null, proc.id, JSON.stringify(data), now()),
     updateRecord: (form, rid, patch) => tx.add('UPDATE submissions SET data = json_patch(data, ?), updated_at = ? WHERE id = ? AND form_id = ?', JSON.stringify(patch), now(), rid, form.id),
     webhook: (url, payload, format) => {
@@ -597,6 +599,27 @@ async function runtimeIO(c, tx, proc) {
     },
   };
 }
+
+/** Cases whose waiting time is over continue now. Run hourly (and by an administrator with "check now"). */
+async function fireTimers(c) {
+  const due = await all(c.db, `SELECT t.id, t.node_id, t.name, i.id AS iid, i.graph, i.vars, i.title, i.status, i.started_by, i.external_ref, i.callback_url, f.name AS flow_name
+    FROM timers t JOIN instances i ON i.id = t.instance_id LEFT JOIN flows f ON f.id = i.flow_id WHERE t.fired_at IS NULL AND t.wake_at <= ? ORDER BY t.wake_at LIMIT 25`, now());
+  let n = 0;
+  for (const t of due) {
+    const claim = await c.db.prepare('UPDATE timers SET fired_at = ? WHERE id = ? AND fired_at IS NULL').bind(now(), t.id).run();
+    if (!claim.meta.changes || t.status !== 'running') continue;   // (taken by someone else, or the case ended in the meantime)
+    const proc = { id: t.iid, flowName: t.flow_name || '', graph: parse(t.graph, { nodes: [], edges: [] }), vars: parse(t.vars, {}), title: t.title, status: t.status, started_by: t.started_by, finished_at: null, ref: t.external_ref, callback: t.callback_url };
+    const tx = new Tx(c.db), io = await runtimeIO(c, tx, proc);
+    io.log(`Waiting time over at “${t.name}”`);
+    advance(proc, t.node_id, io);
+    await finishProc(c, tx, proc);
+    n++;
+  }
+  return n;
+}
+route('POST', '/api/admin/timers/run', async (c) => ({ continued: await fireTimers(c) }), { admin: true });
+/** A request-less context for the hourly job, so it uses exactly the same code as a person clicking. */
+const cronCtx = (env, exec, tenantId) => { const c = new Ctx(new Request((env.PUBLIC_URL || 'https://ordovia.invalid') + '/cron'), env, exec); c.useTenant(tenantId); return c; };
 
 async function finishProc(c, tx, proc) {
   tx.add('UPDATE instances SET vars = ?, status = ?, title = ?, finished_at = ? WHERE id = ?', JSON.stringify(proc.vars), proc.status, proc.title, proc.finished_at, proc.id);
@@ -734,7 +757,8 @@ route('GET', '/api/instances/:id', async (c, { id }) => {
   ]);
   const subject = raw.subject_form_id ? { formId: raw.subject_form_id, id: raw.subject_id, form: ((await c.formsMap()).get(raw.subject_form_id) || {}).name || '', label: (parse(raw.vars, {}).subject || {}).label || ('#' + raw.subject_id) } : null;
   return { instance: info, subject, version: raw.flow_version, reference: raw.external_ref, submissions: subs.map(x => ({ ...x, data: parse(x.data, {}) })), graph: parse(raw.graph, { nodes: [], edges: [] }), vars: parse(raw.vars, {}), events,
-    tasks: tasks.map(t => ({ ...t, assignee: D.describe(parse(t.assignee, {})) })) };
+    tasks: tasks.map(t => ({ ...t, assignee: D.describe(parse(t.assignee, {})) })),
+    timers: await all(c.db, 'SELECT node_id, name, wake_at, fired_at FROM timers WHERE instance_id = ? ORDER BY id', raw.id) };
 });
 
 route('DELETE', '/api/instances/:id', async (c, { id }) => { await run(c.db, 'DELETE FROM instances WHERE id = ?', Number(id)); }, { admin: true });
